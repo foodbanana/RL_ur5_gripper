@@ -44,7 +44,7 @@ uv --version
 
 ```bash
 mkdir -p ~/isaaclab_ws && cd ~/isaaclab_ws
-git clone https://github.com/foodbanana/<repo-name>.git drone_grasp_rl
+git clone https://github.com/foodbanana/RL_ur5_gripper.git drone_grasp_rl
 cd drone_grasp_rl
 ```
 
