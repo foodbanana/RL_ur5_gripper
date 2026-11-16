@@ -9,6 +9,8 @@ Reinforcement-learning tasks for drone grasping, built as an installable
 Registered tasks:
 - `DroneGraspRl-Balance-Cartpole`
 
+<br>
+
 ## Requirements
 
 - Ubuntu 24.04 (recommended) or 22.04, x86_64
@@ -17,6 +19,8 @@ Registered tasks:
 - [uv](https://docs.astral.sh/uv/). It downloads Python 3.12 for you, so you don't need a system Python.
 
 See [INSTALL.md](INSTALL.md) for the tested versions, the details behind each step, and troubleshooting.
+
+<br>
 
 ## Quick start (new machine)
 
@@ -45,6 +49,8 @@ Training is working when the last log shows `Mean episode length: 300.00`.
 > - Use a terminal where **ROS 2 is not sourced**. Otherwise `/opt/ros/.../setup.bash` mixes its Python paths into `.venv`.
 > - **Always pass `--extra isaacsim` to `uv sync`.** Without it, uv removes Isaac Sim from the environment.
 > - **Re-run `scripts/fix_isaacsim_fastfinder.sh`** whenever `.venv` is recreated or `uv sync` reinstalls Isaac Sim.
+
+<br>
 
 ## Run the tasks
 
@@ -79,6 +85,8 @@ Use `physics=<PRESET>` to select any preset listed by `isaaclab list_envs --show
 features (`rerun`, `wandb`, `skrl`, ...), pass the matching extra from `pyproject.toml`, for example
 `uv run --extra isaacsim --extra rerun isaaclab ... --viz rerun`.
 
+<br>
+
 ## Project structure
 
 ```
@@ -95,6 +103,8 @@ tests/                 # registration test
 
 To add another robot, create a sibling of `config/cartpole`. To add another task, create a sibling task-family
 directory next to `balance/`.
+
+<br>
 
 ## Project assets
 
@@ -113,6 +123,8 @@ Pass `str(robot_usd_path)` to configuration fields that expect a string. USD and
 ```bash
 sudo apt install git-lfs && git lfs install
 ```
+
+<br>
 
 ## Development
 
@@ -134,6 +146,8 @@ uv run --extra isaacsim isaaclab --editor
 
 This command writes a git-ignored `pyrightconfig.json` that includes the Isaac Sim extensions and the project `src` root.
 For an Isaac Sim binary install outside the project environment, add `--isaac_path <isaac-sim-path>`.
+
+<br>
 
 ## Troubleshooting
 
