@@ -22,7 +22,7 @@ See [INSTALL.md](INSTALL.md) for the tested versions, the details behind each st
 
 <br>
 
-## Quick start (new machine)
+## How to install?
 
 ```bash
 # 1. Install uv
