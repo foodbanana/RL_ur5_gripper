@@ -1,75 +1,105 @@
 # drone_grasp_rl
 
-An installable downstream Isaac Lab task package with a standard uv `src` layout.
+Reinforcement-learning tasks for drone grasping, built as an installable
+[Isaac Lab](https://github.com/isaac-sim/IsaacLab) 3.0 task package (Isaac Sim 6.2, uv `src` layout).
 
-The registered tasks are:
+> **Status:** only the template task is registered so far. Drone grasping tasks will be added under
+> `src/drone_grasp_rl/tasks`.
+
+Registered tasks:
 - `DroneGraspRl-Balance-Cartpole`
 
+## Requirements
 
-## Installation
+- Ubuntu 24.04 (recommended) or 22.04, x86_64
+- NVIDIA GPU (Turing or newer) with driver **580.65.06 or newer**
+- **50 GB or more** of free disk space (Isaac Sim + PyTorch use about 25 GB, plus caches)
+- [uv](https://docs.astral.sh/uv/). It downloads Python 3.12 for you, so you don't need a system Python.
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then create the project environment. The default
-environment uses the Newton backend and does not install Isaac Sim:
+See [INSTALL.md](INSTALL.md) for the tested versions, the details behind each step, and troubleshooting.
 
-```bash
-uv sync
-```
-
-The project forwards every optional extra declared by the Isaac Lab package used to create it, including physics,
-rendering, visualizer, RL, teleoperation, and development features. Inspect `pyproject.toml` for the complete list and
-pass each required extra to `uv run`:
+## Quick start (new machine)
 
 ```bash
-# Standalone OV PhysX
-uv run --extra ovphysx isaaclab random_agent --task <TASK_NAME> physics=ovphysx
+# 1. Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh && source "$HOME/.local/bin/env"
 
-# Isaac Sim with PhysX and RTX rendering
-uv run --extra isaacsim isaaclab random_agent --task <TASK_NAME> physics=isaacsim_physx
+# 2. Clone
+git clone https://github.com/foodbanana/RL_ur5_gripper.git drone_grasp_rl
+cd drone_grasp_rl
 
-# Isaac Sim with the Rerun visualizer
-uv run --extra isaacsim --extra rerun isaaclab random_agent --task <TASK_NAME> --viz rerun
+# 3. Install the exact locked environment into ./.venv
+uv sync --locked --extra isaacsim
+
+# 4. Apply the Isaac Sim 6.2 patch (required)
+bash scripts/fix_isaacsim_fastfinder.sh
+
+# 5. Check that it works
+uv run isaaclab list_envs --show_presets
+uv run isaaclab train --rl_library rsl_rl --task DroneGraspRl-Balance-Cartpole
 ```
 
-The `all` extra forwards Isaac Lab's `all` selection. The `ov` extra installs both the `ovphysx` and `ovrtx` runtimes;
-you can also select either independently. Commit `pyproject.toml` and `uv.lock` so collaborators use the same
-environment.
+Training is working when the last log shows `Mean episode length: 300.00`.
+
+> [!IMPORTANT]
+> - Use a terminal where **ROS 2 is not sourced**. Otherwise `/opt/ros/.../setup.bash` mixes its Python paths into `.venv`.
+> - **Always pass `--extra isaacsim` to `uv sync`.** Without it, uv removes Isaac Sim from the environment.
+> - **Re-run `scripts/fix_isaacsim_fastfinder.sh`** whenever `.venv` is recreated or `uv sync` reinstalls Isaac Sim.
 
 ## Run the tasks
 
-Replace the placeholders below with a task listed above and a selected RL library.
+Two physics backends are available. Newton is the default and does not need Isaac Sim. PhysX runs through Isaac Sim.
 
 ```bash
-# List this project's environments and their available presets
-uv run isaaclab list_envs --show_presets
+TASK=DroneGraspRl-Balance-Cartpole
 
-# Exercise an environment without a trained policy
-uv run isaaclab zero_agent --task <TASK_NAME> --num_envs 16
-uv run isaaclab random_agent --task <TASK_NAME> --num_envs 16
+# Newton backend
+uv run isaaclab train --rl_library rsl_rl --task $TASK
+uv run isaaclab play  --rl_library rsl_rl --task $TASK --checkpoint latest --num_envs 16 --viz newton_gl
 
-# Train and play
-uv run isaaclab train --rl_library <RL_LIBRARY> --task <TASK_NAME>
-uv run isaaclab play --rl_library <RL_LIBRARY> --task <TASK_NAME> --checkpoint latest
+# PhysX backend (Isaac Sim)
+uv run --extra isaacsim isaaclab train --rl_library rsl_rl --task $TASK physics=isaacsim_physx
+uv run --extra isaacsim isaaclab play  --rl_library rsl_rl --task $TASK --checkpoint latest --num_envs 16 \
+    physics=isaacsim_physx --viz kit
 
-# Distributed training
-uv run isaaclab train_multigpu --rl_library <RL_LIBRARY> --task <TASK_NAME> --num_gpus 2
+# Run without a trained policy
+uv run isaaclab zero_agent   --task $TASK --num_envs 16
+uv run isaaclab random_agent --task $TASK --num_envs 16
 
-# Benchmark startup, runtime, training, or play
-uv run isaaclab benchmark runtime --task <TASK_NAME> --num_envs 16 --num_steps 1000
-uv run isaaclab benchmark training --rl_library <RL_LIBRARY> --task <TASK_NAME> --max_iterations 10
+# Multi-GPU training and benchmarks
+uv run isaaclab train_multigpu --rl_library rsl_rl --task $TASK --num_gpus 2
+uv run isaaclab benchmark runtime  --task $TASK --num_envs 16 --num_steps 1000
+uv run isaaclab benchmark training --rl_library rsl_rl --task $TASK --max_iterations 10
 ```
 
-Use `physics=<PRESET>` to select one of the presets shown by `isaaclab list_envs`.
+Checkpoints are written to `logs/rsl_rl/<experiment>/<timestamp>/`. `logs/` is git-ignored, so trained policies stay
+on the machine that trained them. To share a policy, copy that run folder to the other machine's `logs/rsl_rl/<experiment>/`.
+
+Use `physics=<PRESET>` to select any preset listed by `isaaclab list_envs --show_presets`. To use other optional
+features (`rerun`, `wandb`, `skrl`, ...), pass the matching extra from `pyproject.toml`, for example
+`uv run --extra isaacsim --extra rerun isaaclab ... --viz rerun`.
 
 ## Project structure
 
-Task families live in `src/drone_grasp_rl/tasks`. Within a manager-based family, task-wide MDP terms live in `mdp`, while
-robot-specific scenes, registrations, and agent configurations live in `config/cartpole`. Add another robot by
-creating a sibling of `config/cartpole`; add another task by creating a sibling task-family directory.
+```
+src/drone_grasp_rl/
+├── assets/            # asset configs; data/ holds project-owned USD files (Git LFS)
+└── tasks/
+    └── balance/       # one task family
+        ├── mdp/       # task-wide MDP terms (rewards, observations, ...)
+        └── config/
+            └── cartpole/   # robot-specific scene, registration, agent configs
+scripts/               # helper scripts (Isaac Sim patch, list_envs)
+tests/                 # registration test
+```
+
+To add another robot, create a sibling of `config/cartpole`. To add another task, create a sibling task-family
+directory next to `balance/`.
 
 ## Project assets
 
 Keep project-owned USD files and related data under `src/drone_grasp_rl/assets/data`. The asset module exposes a
-stable path that works from an editable checkout and an installed wheel:
+path that works from both an editable checkout and an installed wheel:
 
 ```python
 from drone_grasp_rl.assets import DRONE_GRASP_RL_ASSETS_DIR
@@ -77,57 +107,41 @@ from drone_grasp_rl.assets import DRONE_GRASP_RL_ASSETS_DIR
 robot_usd_path = DRONE_GRASP_RL_ASSETS_DIR / "robots" / "my_robot.usd"
 ```
 
-Keep asset configuration in the `drone_grasp_rl.assets` package and pass `str(robot_usd_path)` to configuration fields that
-expect a string. USD files are configured for Git LFS by the project's `.gitattributes`; install Git LFS before adding
-large binary assets.
+Pass `str(robot_usd_path)` to configuration fields that expect a string. USD and checkpoint files (`*.usd*`, `*.pt`,
+`*.jit`, `*.hdf5`) are stored with Git LFS. **Install Git LFS before you add or clone such files:**
+
+```bash
+sudo apt install git-lfs && git lfs install
+```
 
 ## Development
 
-Run the registration test and code-quality checks through the project environment:
-
 ```bash
-uv run pytest
-uv run pre-commit run --all-files
+uv run pytest                          # registration test
+uv run pre-commit run --all-files      # ruff, codespell, ...
+uv add <package>                       # add a dependency
 ```
 
-The test helpers under `source/isaaclab_tasks/test` in the Isaac Lab repository are not part of the installed
-`isaaclab_tasks` package. Keep test fixtures in this project and use public Isaac Lab APIs. If you copy
-`env_test_utils.py`, it becomes vendored code whose upstream changes you must track.
+`uv add` updates `pyproject.toml` and `uv.lock`. **Commit both files** so everyone else gets the same environment
+from `uv sync --locked --extra isaacsim`.
 
-To configure VS Code or Cursor, run the `setup_python_env` task or invoke its command directly:
-
-```bash
-uv run isaaclab --editor
-```
-
-The setup command selects the active interpreter and writes a git-ignored `pyrightconfig.json`. The resulting
-configuration inherits the project's checked-in Pyright settings and adds the Isaac Sim extensions, project `src` root,
-and any Isaac Lab packages discovered in the active Python environment. This supports both Pylance in VS Code and
-basedpyright in Cursor.
-
-In VS Code, use Pylance and select the interpreter that ran the setup command. In Cursor, install the
-[basedpyright extension](https://marketplace.visualstudio.com/items?itemName=detachhead.basedpyright) instead of
-Pylance, select the same interpreter, and reload the window. Both language servers read `pyrightconfig.json`.
-
-When using the `isaacsim` extra, include it while generating the editor configuration so the command can discover the
-Isaac Sim installation:
+To configure the editor (VS Code with Pylance, or Cursor with basedpyright), run the following command and then select
+the `.venv` interpreter. You can also run the `setup_python_env` task, but that task leaves out the `isaacsim` extra.
 
 ```bash
 uv run --extra isaacsim isaaclab --editor
 ```
 
-For an Isaac Sim binaries installation that is not available in the project environment, provide its path explicitly:
-
-```bash
-# Linux
-uv run isaaclab --editor --isaac_path <isaac-sim-path>
-
-# Windows
-uv run isaaclab --editor --isaac_path <isaac-sim-path>
-```
+This command writes a git-ignored `pyrightconfig.json` that includes the Isaac Sim extensions and the project `src` root.
+For an Isaac Sim binary install outside the project environment, add `--isaac_path <isaac-sim-path>`.
 
 ## Troubleshooting
 
-If Pylance or basedpyright cannot resolve modules, confirm that the selected interpreter matches the one used to run the
-setup command, then reload the editor window. To add a missing extension or reduce indexing memory, edit the `extraPaths`
-array in the root `pyrightconfig.json`; remove simulator extension directories that the project does not use.
+| Symptom | Fix |
+|---|---|
+| About 40 extensions fail with `charset_normalizer.md.MessDetectorPlugin size changed ...` | Run `bash scripts/fix_isaacsim_fastfinder.sh` |
+| `ROS2 Bridge startup failed` in the Isaac Sim console | Harmless when ROS 2 is not loaded; it does not affect training |
+| `uv sync --locked` fails | `uv.lock` is out of date with `pyproject.toml`. Pull the latest commit, or ask whoever changed the dependencies to commit `uv.lock` |
+| Pylance or basedpyright cannot resolve modules | Select the interpreter that ran `isaaclab --editor`, then reload the window. Edit `extraPaths` in `pyrightconfig.json` to add a missing extension or to reduce indexing memory |
+
+See [INSTALL.md](INSTALL.md#troubleshooting) for more.
