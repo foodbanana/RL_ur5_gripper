@@ -25,5 +25,25 @@ URDF file (`../meshes/...`). Joints, links, inertias and limits are unchanged.
   (plus `camera_bottom_screw_frame` on the mount).
 - Gripper: `rh_r1_joint` is the driven joint. `rh_r2`, `rh_l1`, `rh_l2` mimic it
   (these three names have no `_joint` suffix).
-- TCP: `rh_p12_rn_tcp_joint` is a fixed joint, so link merging during conversion removes it.
-  Define the TCP in Isaac Lab as `rh_p12_rn_base` + 0.11 m along z (`body_offset`).
+- TCP: `rh_p12_rn_tcp` (tool0 + 125 mm) is massless, so it is a plain Xform, not a rigid body.
+  Define the TCP in Isaac Lab as `rh_p12_rn_base` (tool0 + 15 mm) + 0.11 m along z (`body_offset`).
+
+## Converted USD
+
+`scripts/convert_assets.py` converts this URDF to
+`assets/data/robots/ur5_rh_p12_d435i/ur5_rh_p12_d435i/ur5_rh_p12_d435i.usda` (committed, Git LFS):
+
+```bash
+uv run --extra isaacsim python scripts/convert_assets.py
+```
+
+- Options mirror the old Isaac Sim 6.1 import: no fixed-joint merging, no collision from visuals,
+  convex-hull colliders, no self collision, no mesh merging. The base is not fixed at import time
+  (spawn with `fix_root_link=True` for a fixed base, or attach to a moving base).
+- Result: 16 rigid bodies (massless frames such as `tool0`, `flange` and the TCP become plain Xforms),
+  10 revolute joints, `Physics` variants `physics` (default), `physx`, `mujoco`, `none`.
+- Mimic: `rh_r2`, `rh_l1`, `rh_l2` carry `newton:mimicJoint -> rh_r1_joint`. In the `physx` variant
+  the followers also have a position drive, so their gains must be 0 in the actuator config.
+- The script strips the absolute repository path and the converter's random temp-folder name from
+  the text outputs. Re-runs then differ only in the generation timestamp in `config.yaml` and in the
+  binary encoding of `payloads/geometries.usd`.
