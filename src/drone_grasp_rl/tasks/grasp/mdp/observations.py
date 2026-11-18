@@ -5,8 +5,10 @@
 
 """Observation terms for the drone grasp task.
 
-Poses come from the ``ee_frame`` frame transformer, whose source is the robot base, so every pose is in
-the robot base frame (what the real robot can compute from its own base).
+Poses are defined by the ``ee_frame`` frame transformer config (source = robot base, target frames ``tcp`` and
+``drone``), so every pose is in the robot base frame (what the real robot can compute from its own base). They are
+computed from the articulation body poses, not read from the sensor: on Newton the sensor data stays zero until the
+first physics step, so the first observation after the initial reset would be wrong.
 """
 
 from __future__ import annotations
@@ -23,25 +25,62 @@ from isaaclab.managers import ManagerTermBase, SceneEntityCfg
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
     from isaaclab.managers import ObservationTermCfg
-    from isaaclab.sensors import ContactSensor, FrameTransformer
+    from isaaclab.sensors import ContactSensor
+
+
+def _resolve_frame(env: ManagerBasedEnv, prim_path: str) -> tuple:
+    """(articulation, body index) of the body a frame transformer prim path points at."""
+    for asset in env.scene.articulations.values():
+        root = asset.cfg.prim_path.replace("{ENV_REGEX_NS}", "")
+        if prim_path.replace("{ENV_REGEX_NS}", "").startswith(root + "/"):
+            return asset, asset.body_names.index(prim_path.rsplit("/", 1)[-1])
+    raise ValueError(f"No articulation body for frame prim path '{prim_path}'.")
+
+
+def frame_pose_w(
+    env: ManagerBasedEnv, frame_name: str | None, sensor_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame")
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """World pose of a target frame of the frame transformer config (``None``: its source frame), from the
+    articulation body poses: position (N, 3) [m], quaternion (x, y, z, w) (N, 4)."""
+    cache = env.__dict__.setdefault("_drone_grasp_frames", {})
+    key = (sensor_cfg.name, frame_name)
+    if key not in cache:
+        cfg = env.scene[sensor_cfg.name].cfg
+        if frame_name is None:
+            prim_path, offset = cfg.prim_path, cfg.source_frame_offset
+        else:
+            frame = next(f for f in cfg.target_frames if f.name == frame_name)
+            prim_path, offset = frame.prim_path, frame.offset
+        asset, body = _resolve_frame(env, prim_path)
+        pos = torch.tensor(offset.pos, device=env.device).repeat(env.num_envs, 1)
+        rot = torch.tensor(offset.rot, device=env.device).repeat(env.num_envs, 1)
+        cache[key] = (asset, body, pos, rot)
+    asset, body, off_pos, off_rot = cache[key]
+    pose = asset.data.body_link_pose_w.torch[:, body]
+    return math_utils.combine_frame_transforms(pose[:, :3], pose[:, 3:7], off_pos, off_rot)
+
+
+def frame_pose_b(
+    env: ManagerBasedEnv, frame_name: str, sensor_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame")
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Pose of a target frame in the source (robot base) frame: position (N, 3) [m], quaternion (x, y, z, w)."""
+    base_pos, base_quat = frame_pose_w(env, None, sensor_cfg)
+    pos, quat = frame_pose_w(env, frame_name, sensor_cfg)
+    return math_utils.subtract_frame_transforms(base_pos, base_quat, pos, quat)
 
 
 def frame_pos_b(
     env: ManagerBasedEnv, frame_name: str, sensor_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame")
 ) -> torch.Tensor:
-    """Position of a target frame of the frame transformer in its source (robot base) frame [m], shape (N, 3)."""
-    sensor: FrameTransformer = env.scene[sensor_cfg.name]
-    index = sensor.data.target_frame_names.index(frame_name)
-    return sensor.data.target_pos_source.torch[:, index]
+    """Position of a target frame in the robot base frame [m], shape (N, 3)."""
+    return frame_pose_b(env, frame_name, sensor_cfg)[0]
 
 
 def frame_quat_b(
     env: ManagerBasedEnv, frame_name: str, sensor_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame")
 ) -> torch.Tensor:
     """Orientation (x, y, z, w) of a target frame in the robot base frame, with w >= 0, shape (N, 4)."""
-    sensor: FrameTransformer = env.scene[sensor_cfg.name]
-    index = sensor.data.target_frame_names.index(frame_name)
-    return math_utils.quat_unique(sensor.data.target_quat_source.torch[:, index])
+    return math_utils.quat_unique(frame_pose_b(env, frame_name, sensor_cfg)[1])
 
 
 def _quat_from_rotvec(rotvec: torch.Tensor) -> torch.Tensor:
@@ -97,10 +136,7 @@ class mocap_drone_pose_b(ManagerTermBase):
         pos_bias: float = 0.002,
         rot_bias_deg: float = 0.5,
     ) -> torch.Tensor:
-        pos = frame_pos_b(env, frame_name, sensor_cfg)
-        quat = env.scene[sensor_cfg.name].data.target_quat_source.torch[
-            :, env.scene[sensor_cfg.name].data.target_frame_names.index(frame_name)
-        ]
+        pos, quat = frame_pose_b(env, frame_name, sensor_cfg)
         # velocities of the drone in the base frame
         base_quat = env.scene[robot_cfg.name].data.root_quat_w.torch
         drone = env.scene[drone_cfg.name]

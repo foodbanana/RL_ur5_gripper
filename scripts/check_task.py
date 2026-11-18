@@ -8,7 +8,9 @@ Runs ``DroneGraspRl-Grasp-UR5`` with scripted actions and prints PASS/FAIL per c
 3b. mocap    the policy's drone pose differs from the true pose like the motion-capture model: per-axis
              noise about 1 mm, offset within the calibration bias, and while the drone moves at 0.1 m/s a
              lag of about 2.5 mm (20 ms latency + half of the 10 ms sample period)
-4. arm       an arm action moves each arm joint to ``default + scale * action``; the gripper stays open
+4. arm       an arm action moves each joint goal by ``action * max_step`` per step; the joints follow the
+             interpolated target within 4 deg at full speed (old repo 2.9 deg, protective stop 5 deg)
+             and settle on the goal
 5. close     a close command shuts the empty gripper past 62 deg; an open command opens it again
 6. grasp     with the drone waist placed at the TCP, closing at the gripper profile speed stops before
              62 deg with both fingers on the drone (> 1 N per side) and the drone within 10 mm of the TCP:
@@ -51,11 +53,16 @@ def main():
     from drone_grasp_rl.assets.robots import ARM_JOINT_NAMES, GRIPPER_JOINT_NAME
     from drone_grasp_rl.tasks.grasp.config.ur5.env_cfg import FINGER_CONTACT_SENSORS
     from drone_grasp_rl.tasks.grasp.grasp_env_cfg import DRONE_TARGET_OFFSET
+    from drone_grasp_rl.tasks.grasp.mdp import frame_pos_b, frame_quat_b
 
     torch.manual_seed(0)
     env_cfg, _ = resolve_task_config(TASK, "")
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.episode_length_s = 60.0  # no time-out resets during the checks
+    # No success/failure resets either: the grasp check closes on a teleported drone. The judge, which also stops
+    # the drone motors, is checked by scripts/scripted_grasp.py.
+    for name in ("grasp_success", "grasp_failed", "drone_knocked", "protective_stop"):
+        setattr(env_cfg.terminations, name, None)
     if args_cli.device is not None:
         env_cfg.sim.device = args_cli.device
     args_cli.device = env_cfg.sim.device
@@ -65,18 +72,18 @@ def main():
         env = gym.make(TASK, cfg=env_cfg).unwrapped
         cleanup.callback(env.close)
         n, dev = env.num_envs, env.device
-        robot, drone, frames = env.scene["robot"], env.scene["drone"], env.scene["ee_frame"]
+        robot, drone = env.scene["robot"], env.scene["drone"]
         arm_ids = [robot.joint_names.index(j) for j in ARM_JOINT_NAMES]
         grip_id = robot.joint_names.index(GRIPPER_JOINT_NAME)
-        tcp_i, drone_i = frames.data.target_frame_names.index("tcp"), frames.data.target_frame_names.index("drone")
         reset_term = env.event_manager.get_term_cfg("reset_drone").func
-        arm_scale = env.action_manager.get_term("arm_action").cfg.scale
+        arm_term = env.action_manager.get_term("arm_action")
+        max_step = arm_term.cfg.max_step
 
         def tcp_b():
-            return frames.data.target_pos_source.torch[:, tcp_i].clone()
+            return frame_pos_b(env, "tcp").clone()
 
         def drone_b():
-            return frames.data.target_pos_source.torch[:, drone_i].clone()
+            return frame_pos_b(env, "drone").clone()
 
         def contacts():  # (N, 4) force per finger link [N]: r1, r2, l1, l2
             return torch.stack(
@@ -150,9 +157,7 @@ def main():
         noise_mm = 1000 * rest.std(dim=0).mean()
         bias_mm = 1000 * rest.mean(dim=0).abs().max()
         rot_err = torch.rad2deg(
-            math_utils.quat_error_magnitude(
-                env.obs_buf["policy"][:, off + 3 : off + 7], frames.data.target_quat_source.torch[:, drone_i]
-            )
+            math_utils.quat_error_magnitude(env.obs_buf["policy"][:, off + 3 : off + 7], frame_quat_b(env, "drone"))
         ).max()
         drone.write_root_velocity_to_sim_index(
             root_velocity=torch.tensor([[0.1, 0.0, 0.0, 0.0, 0.0, 0.0]], device=dev).repeat(n, 1)
@@ -172,17 +177,28 @@ def main():
                 f"lag at 0.1 m/s={lag_mm:.2f} mm (expect 2.5)",
             )
         )
-        # 4. arm action contract: +0.1 action on every arm joint
+        # 4. arm action contract: full action (1.0) on every arm joint for 2 steps moves the goal by 2 * max_step
+        #    (0.1 rad, small enough to stay clear of the table and the drone) at the maximum joint speed; the joints
+        #    must follow the interpolated target closely. Then back.
         act = open_action.clone()
-        act[:, :6] = 0.1
-        target = robot.data.default_joint_pos.torch[:, arm_ids] + arm_scale * 0.1
-        run(act, int(1.5 * steps_per_s))
-        a_err = torch.rad2deg((robot.data.joint_pos.torch[:, arm_ids] - target).abs().max())
+        act[:, :6] = 1.0
+        start = arm_term.processed_actions.clone()
+        lag = []
+        for _ in range(2):
+            run(act, 1)
+            lag.append((robot.data.joint_pos.torch[:, arm_ids] - arm_term.target).abs().max())
+        goal_err = torch.rad2deg((arm_term.processed_actions - start - 2 * max_step).abs().max())
+        run(open_action, steps_per_s // 2)
+        a_err = torch.rad2deg((robot.data.joint_pos.torch[:, arm_ids] - arm_term.processed_actions).abs().max())
+        lag_deg = torch.rad2deg(torch.stack(lag).max())
+        run(-act, 2)
         results.append(
             (
                 "arm",
-                bool(a_err < 0.5 and grip_deg().abs().max() < 1.0),
-                f"max |joint - (default + {arm_scale}*0.1)|={a_err:.3f} deg, gripper={grip_deg().abs().max():.2f} deg",
+                bool(goal_err < 1e-3 and a_err < 0.2 and lag_deg < 4.0 and grip_deg().abs().max() < 1.0),
+                f"goal step error={goal_err:.4f} deg, settled error={a_err:.3f} deg, "
+                f"max lag while moving={lag_deg:.2f} deg (protective stop at 5), "
+                f"gripper={grip_deg().abs().max():.2f} deg",
             )
         )
         run(open_action, steps_per_s)

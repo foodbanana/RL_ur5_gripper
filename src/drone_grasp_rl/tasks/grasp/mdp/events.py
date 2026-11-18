@@ -45,6 +45,8 @@ class reset_drone_at_targets(ManagerTermBase):
         super().__init__(cfg, env)
         self.targets = torch.tensor(cfg.params["targets"], dtype=torch.float32, device=env.device)
         self.target_index = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+        self.reset_pos_b = torch.zeros(env.num_envs, 3, device=env.device)
+        """Drone position in the robot base frame right after the last reset [m]."""
 
     def __call__(
         self,
@@ -63,6 +65,7 @@ class reset_drone_at_targets(ManagerTermBase):
         index = torch.randint(len(self.targets), (num,), device=env.device)
         self.target_index[env_ids] = index
         pos_b = self.targets[index] + math_utils.sample_uniform(-offset, offset, (num, 3), env.device)
+        self.reset_pos_b[env_ids] = pos_b
 
         base_pos = robot.data.root_pos_w.torch[env_ids]
         base_quat = robot.data.root_quat_w.torch[env_ids]

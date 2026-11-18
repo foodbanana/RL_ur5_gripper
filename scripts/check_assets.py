@@ -54,7 +54,7 @@ from drone_grasp_rl.assets.robots import (  # noqa: E402
     UNDER_DRONE_JOINT_POS,
     UR5_RHP12_CFG,
 )
-from drone_grasp_rl.physics import PHYSICS_VARIANT, SIM_DT, DroneGraspPhysicsCfg  # noqa: E402
+from drone_grasp_rl.physics import DRONE_USD, PHYSICS_VARIANT, SIM_DT, DroneGraspPhysicsCfg  # noqa: E402
 
 TABLE_TOP_Z = 0.762
 """Table top height = robot base height (scene_drone.yaml)."""
@@ -68,6 +68,7 @@ robot_cfg = replace(UR5_RHP12_CFG, prim_path="{ENV_REGEX_NS}/Robot")
 robot_cfg.spawn.variants = {"Physics": PHYSICS_VARIANT[args_cli.backend]}
 robot_cfg.init_state.pos = (0.0, 0.0, TABLE_TOP_Z)
 drone_cfg = replace(IRIS_CFG, prim_path="{ENV_REGEX_NS}/Drone")
+drone_cfg.spawn.usd_path = DRONE_USD[args_cli.backend]
 drone_cfg.init_state.pos = (DRONE_POS_BASE[0], DRONE_POS_BASE[1], DRONE_POS_BASE[2] + TABLE_TOP_Z)
 
 

@@ -19,7 +19,10 @@ from isaaclab_physx.sim.schemas import PhysxArticulationCfg
 from . import DRONE_GRASP_RL_ASSETS_DIR
 
 IRIS_USD_PATH = DRONE_GRASP_RL_ASSETS_DIR / "drones/iris/iris_0p75.usda"
-"""Scaled Iris with the data-collection overrides."""
+"""Scaled Iris with the data-collection overrides and the original body collider (PhysX)."""
+
+IRIS_NEWTON_USD_PATH = DRONE_GRASP_RL_ASSETS_DIR / "drones/iris/iris_0p75_newton.usda"
+"""The same with the body collider replaced by fixed convex pieces (Newton cannot load the original)."""
 
 DRONE_BODY_NAME = "body"
 """Central rigid body: the grasp target and the link that receives the hover wrench."""

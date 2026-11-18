@@ -14,11 +14,20 @@ from isaaclab_physx.physics import PhysxCfg
 
 from isaaclab_tasks.utils import PresetCfg
 
+from drone_grasp_rl.assets.drones import IRIS_NEWTON_USD_PATH, IRIS_USD_PATH
+
 SIM_DT = 1.0 / 120.0
 """Physics step [s]. Matches data_collection_ur5_gripper (120 Hz); the arm and gripper gains are tuned for it."""
 
 PHYSICS_VARIANT = {"isaacsim_physx": "physx", "physx": "physx", "newton_mjwarp": "mujoco"}
 """USD ``Physics`` variant to select on the converted robot for each backend."""
+
+DRONE_USD = {
+    "isaacsim_physx": str(IRIS_USD_PATH),
+    "physx": str(IRIS_USD_PATH),
+    "newton_mjwarp": str(IRIS_NEWTON_USD_PATH),
+}
+"""Drone USD for each backend (original body collider for PhysX, fixed convex pieces for Newton)."""
 
 
 @configclass

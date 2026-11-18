@@ -76,10 +76,12 @@ class UR5GraspSceneCfg(grasp.GraspSceneCfg):
 
 @configclass
 class UR5ActionsCfg(grasp.ActionsCfg):
-    """Arm joint position targets around ``under_drone`` and an open/close gripper command."""
+    """Bounded arm joint goal steps and an open/close gripper command."""
 
-    arm_action = mdp.JointPositionActionCfg(
-        asset_name="robot", joint_names=ARM_JOINT_NAMES, scale=0.5, use_default_offset=True, preserve_order=True
+    # Goal moves at most 0.05 rad per 30 Hz step (1.5 rad/s, the old IK's joint target speed limit), reached by
+    # linear interpolation like the old repo's 33 ms command interpolation.
+    arm_action = mdp.InterpolatedRelativeJointPositionActionCfg(
+        asset_name="robot", joint_names=ARM_JOINT_NAMES, max_step=0.05
     )
     # Only the leader joint is commanded; the three mimic joints follow it. The target moves at the real
     # gripper's profile speed (fully closed in 2.2 s); action < 0 closes, otherwise opens.
@@ -108,3 +110,9 @@ class UR5GraspEnvCfg(grasp.GraspEnvCfg):
             "robot", joint_names=[GRIPPER_JOINT_NAME]
         )
         self.observations.critic.finger_contact.params["sensor_names"] = FINGER_CONTACT_SENSORS
+        self.events.finger_material = grasp.contact_material(SceneEntityCfg("robot", body_names=FINGER_BODY_NAMES))
+        self.terminations.grasp_success.params.update(
+            right_sensors=[s for s in FINGER_CONTACT_SENSORS if s.startswith("r")],
+            left_sensors=[s for s in FINGER_CONTACT_SENSORS if s.startswith("l")],
+            gripper_joint=GRIPPER_JOINT_NAME,
+        )

@@ -27,8 +27,10 @@ from isaaclab.sensors import FrameTransformerCfg
 from isaaclab.utils import configclass
 from isaaclab.visualizers import VisualizerCfg
 
-from drone_grasp_rl.assets.drones import IRIS_CFG
-from drone_grasp_rl.physics import SIM_DT, DroneGraspPhysicsCfg
+from isaaclab_tasks.utils import preset
+
+from drone_grasp_rl.assets.drones import DRONE_BODY_NAME, IRIS_CFG
+from drone_grasp_rl.physics import DRONE_USD, SIM_DT, DroneGraspPhysicsCfg
 
 from . import mdp
 
@@ -52,6 +54,29 @@ DRONE_TARGET_OFFSET = 0.03
 
 DRONE_DEFAULT_POS_BASE = (0.60, 0.0, 0.738)
 """Default drone position in the robot base frame [m] (world z 1.50 in the data collection scene)."""
+
+
+def contact_material(asset_cfg: SceneEntityCfg):
+    """Startup event giving ``asset_cfg``'s bodies the contact material of the data collection repo.
+
+    PhysX: 0.6 static / 0.5 dynamic friction, no restitution (``drive_gains.yaml``, finger links and object).
+    Newton keeps its default (friction 1.0): PhysX friction values do not carry over numerically, and with 0.6 the
+    closing fingers squeezed the floating drone out of the grasp.
+    """
+    return preset(
+        default=EventTerm(
+            func=mdp.randomize_rigid_body_material,
+            mode="startup",
+            params={
+                "asset_cfg": asset_cfg,
+                "static_friction_range": (0.6, 0.6),
+                "dynamic_friction_range": (0.5, 0.5),
+                "restitution_range": (0.0, 0.0),
+                "num_buckets": 1,
+            },
+        ),
+        newton_mjwarp=None,
+    )
 
 
 @configclass
@@ -84,6 +109,10 @@ class GraspSceneCfg(InteractiveSceneCfg):
 
     # The wrist and third-view cameras need light also when headless.
     dome_light = AssetBaseCfg(prim_path="/World/DomeLight", spawn=sim_utils.DomeLightCfg(intensity=1000.0))
+
+    def __post_init__(self):
+        # Original body collider on PhysX, fixed convex pieces on Newton.
+        self.drone.spawn.usd_path = preset(default=DRONE_USD["isaacsim_physx"], **DRONE_USD)
 
 
 @configclass
@@ -131,7 +160,9 @@ class ObservationsCfg:
 
 @configclass
 class EventCfg:
-    """Reset events, applied in this order after the scene reset."""
+    """Startup events once; reset events in this order after the scene reset."""
+
+    drone_material = contact_material(SceneEntityCfg("drone", body_names=[DRONE_BODY_NAME]))
 
     # Robot to its default (start) pose with matching joint targets, drone to its default state.
     reset_scene = EventTerm(func=mdp.reset_scene_to_default, mode="reset", params={"reset_joint_targets": True})
@@ -155,6 +186,15 @@ class RewardsCfg:
 
 @configclass
 class TerminationsCfg:
+    """The judge must stay first: the other terms and the rewards of the same step read its state."""
+
+    # success; the judge also stops the drone motors after the grasp. Sensor and joint names: robot config.
+    grasp_success = DoneTerm(
+        func=mdp.grasp_judge, params={"right_sensors": MISSING, "left_sensors": MISSING, "gripper_joint": MISSING}
+    )
+    grasp_failed = DoneTerm(func=mdp.grasp_failed)
+    drone_knocked = DoneTerm(func=mdp.drone_knocked)
+    protective_stop = DoneTerm(func=mdp.protective_stop)
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
 
@@ -171,7 +211,8 @@ class GraspEnvCfg(ManagerBasedRLEnvCfg):
 
     def __post_init__(self):
         self.decimation = 4
-        self.episode_length_s = 10.0
+        # approach about 3 s, close 2.2 s, kill delay 1 s, hold 2.5 s, plus slack
+        self.episode_length_s = 12.0
         self.sim.dt = SIM_DT
         self.sim.render_interval = self.decimation
         self.sim.physics = DroneGraspPhysicsCfg()

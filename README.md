@@ -106,7 +106,8 @@ scripts/
 ├── convert_assets.py        # URDF -> robot USD (rerun after changing the URDF or meshes)
 ├── build_drone_collision.py # drone body collider -> fixed convex pieces (iris_collision.usda)
 ├── check_assets.py          # robot and drone checks: TCP, drives, gripper, mimic, hover
-├── check_task.py            # task checks: reset positions, action contract, contact sensors, grasp
+├── check_task.py            # task checks: reset positions, mocap model, action contract, contact sensors, grasp
+├── scripted_grasp.py        # IK expert runs the full episode protocol and reports the judge's outcomes
 └── fix_isaacsim_fastfinder.sh, list_envs.py
 tests/                 # registration test
 ```
@@ -118,6 +119,7 @@ uv run --extra isaacsim python scripts/check_assets.py --backend isaacsim_physx
 uv run                  python scripts/check_assets.py --backend newton_mjwarp
 uv run --extra isaacsim python scripts/check_task.py physics=isaacsim_physx
 uv run                  python scripts/check_task.py physics=newton_mjwarp
+uv run --extra isaacsim python scripts/scripted_grasp.py physics=isaacsim_physx
 ```
 
 To add another robot, create a sibling of `config/ur5`. To add another task, create a sibling task-family

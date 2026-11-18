@@ -1,12 +1,12 @@
-"""Pre-decompose the Iris body collider into convex hulls and write ``iris_collision.usda``.
+"""Pre-decompose the Iris body collider into convex hulls and write ``iris_collision.usda`` (Newton only).
 
-Why: the Pegasus ``iris.usd`` marks the body collider as ``convexDecomposition``. PhysX cooks its own
-decomposition, while Newton runs CoACD at load time; MuJoCo then fails on a near-zero-volume piece
-("mesh volume is too small") and the pieces differ between runs. Writing the decomposition once gives
-both engines the same, deterministic collision shape.
+Why: the Pegasus ``iris.usd`` marks the body collider as ``convexDecomposition``. Newton runs CoACD on it at load
+time; the pieces differ between runs and MuJoCo fails on a near-zero-volume piece ("mesh volume is too small").
+Writing the decomposition once gives Newton a deterministic collision shape. PhysX keeps its own decomposition
+(see ``assets/data/drones/iris/README.md``).
 
 The layer disables collision on the original body mesh (it stays visible) and adds invisible convex
-hull pieces with the same local transform. ``iris_0p75.usda`` sublayers it. Pieces below
+hull pieces with the same local transform. ``iris_0p75_newton.usda`` sublayers it. Pieces below
 ``--min_volume`` are dropped.
 
 Usage (from the repository root; no simulator needed):
