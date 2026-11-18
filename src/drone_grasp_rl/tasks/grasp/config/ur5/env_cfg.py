@@ -24,6 +24,7 @@ from drone_grasp_rl.assets.robots import (
     GRIPPER_PROFILE_VELOCITY,
     TCP_BODY_NAME,
     TCP_OFFSET_POS,
+    UNDER_DRONE_TCP_POS_B,
     UR5_RHP12_CFG,
 )
 from drone_grasp_rl.physics import PHYSICS_VARIANT
@@ -84,13 +85,15 @@ class UR5ActionsCfg(grasp.ActionsCfg):
         asset_name="robot", joint_names=ARM_JOINT_NAMES, max_step=0.05
     )
     # Only the leader joint is commanded; the three mimic joints follow it. The target moves at the real
-    # gripper's profile speed (fully closed in 2.2 s); action < 0 closes, otherwise opens.
+    # gripper's profile speed (fully closed in 2.2 s); action < 0 closes and stays closed for the episode.
     gripper_action = mdp.ProfiledBinaryJointPositionActionCfg(
         asset_name="robot",
         joint_names=[GRIPPER_JOINT_NAME],
         open_command_expr={GRIPPER_JOINT_NAME: 0.0},
         close_command_expr={GRIPPER_JOINT_NAME: GRIPPER_CLOSED_POS},
         profile_velocity=GRIPPER_PROFILE_VELOCITY,
+        # one grasp attempt per episode; also lets an exploring policy actually close the gripper
+        latch_close=True,
     )
 
 
@@ -106,11 +109,22 @@ class UR5GraspEnvCfg(grasp.GraspEnvCfg):
         arm = SceneEntityCfg("robot", joint_names=ARM_JOINT_NAMES, preserve_order=True)
         self.observations.policy.arm_joint_pos.params["asset_cfg"] = arm
         self.observations.policy.arm_joint_vel.params["asset_cfg"] = arm
+        self.rewards.joint_vel.params["asset_cfg"] = arm
+        self.rewards.joint_limits.params["asset_cfg"] = arm
         self.observations.policy.gripper_pos.params["asset_cfg"] = SceneEntityCfg(
             "robot", joint_names=[GRIPPER_JOINT_NAME]
         )
         self.observations.critic.finger_contact.params["sensor_names"] = FINGER_CONTACT_SENSORS
         self.events.finger_material = grasp.contact_material(SceneEntityCfg("robot", body_names=FINGER_BODY_NAMES))
+        # Curriculum: half of the training resets put the drone 0-30 cm right above the start TCP, the rest use the
+        # reference positions (play: none). 0-10 cm only taught the final rise and close; the approach from the
+        # reference positions was lost until the range covered the full 30 cm.
+        self.events.reset_drone.params.update(
+            near_fraction=0.5,
+            start_tcp_pos_b=UNDER_DRONE_TCP_POS_B,
+            grasp_offset=mdp.GRASP_OFFSET,
+            near_height_range=(0.0, 0.30),
+        )
         self.terminations.grasp_success.params.update(
             right_sensors=[s for s in FINGER_CONTACT_SENSORS if s.startswith("r")],
             left_sensors=[s for s in FINGER_CONTACT_SENSORS if s.startswith("l")],

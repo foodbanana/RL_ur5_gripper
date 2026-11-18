@@ -26,7 +26,18 @@ __all__ = [
     "hold_drone_in_place",
     "mocap_drone_pose_b",
     "reset_drone_at_targets",
-    "tcp_drone_distance_tanh",
+    "GRASP_OFFSET",
+    "approach_fine",
+    "approach_path_distance",
+    "approach_progress",
+    "close_near",
+    "drone_push",
+    "empty_close",
+    "finger_contact",
+    "hold",
+    "misalignment",
+    "tcp_in_grasp_frame",
+    "terminal_bonus",
 ]
 
 from isaaclab.envs.mdp import *  # noqa: F401, F403
@@ -40,5 +51,18 @@ from .actions import (
 from .events import hold_drone_in_place, reset_drone_at_targets
 from .judge import APPROACH, FAILED, GRASPED, HELD, KILLED, get_judge, grasp_failed, grasp_judge
 from .observations import contact_forces, frame_pos_b, frame_pose_b, frame_pose_w, frame_quat_b, mocap_drone_pose_b
-from .rewards import tcp_drone_distance_tanh
+from .rewards import (
+    GRASP_OFFSET,
+    approach_fine,
+    approach_path_distance,
+    approach_progress,
+    close_near,
+    drone_push,
+    empty_close,
+    finger_contact,
+    hold,
+    misalignment,
+    tcp_in_grasp_frame,
+    terminal_bonus,
+)
 from .terminations import drone_knocked, protective_stop

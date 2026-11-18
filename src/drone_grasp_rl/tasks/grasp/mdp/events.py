@@ -34,9 +34,20 @@ class reset_drone_at_targets(ManagerTermBase):
     valid when the base moves or turns. The drone keeps the base orientation. The chosen reference index
     of each environment is kept in :attr:`target_index` for logging and dataset metadata.
 
+    Training curriculum (``near_fraction`` > 0): that fraction of the resets instead puts the drone right above the
+    TCP's start position, with its grasp point ``near_height_range`` [m] above the TCP on the vertical approach line
+    (plus ``near_lateral`` [m] of lateral offset). Those episodes start within reach of a grasp, so the policy
+    experiences close, contact and success early; without them it learned to touch in and leave. Their
+    :attr:`target_index` is -1 and :attr:`near_start` is True.
+
     Params:
         targets: Reference drone positions in the robot base frame [m], shape (K, 3).
         offset: Half width of the uniform offset added on each axis [m].
+        near_fraction: Fraction of resets that start near the grasp.
+        start_tcp_pos_b: TCP position of the robot's start pose in the base frame [m] (needed if near_fraction > 0).
+        grasp_offset: Planned TCP position in the drone body frame [m].
+        near_height_range: Distance of the grasp point above the start TCP [m].
+        near_lateral: Half width of the uniform lateral offset of near starts [m].
         drone_cfg: The drone articulation.
         robot_cfg: The robot whose root frame is the base frame.
     """
@@ -47,6 +58,8 @@ class reset_drone_at_targets(ManagerTermBase):
         self.target_index = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
         self.reset_pos_b = torch.zeros(env.num_envs, 3, device=env.device)
         """Drone position in the robot base frame right after the last reset [m]."""
+        self.near_start = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        """The last reset used the near-grasp curriculum start."""
 
     def __call__(
         self,
@@ -54,6 +67,11 @@ class reset_drone_at_targets(ManagerTermBase):
         env_ids: torch.Tensor | slice,
         targets: list[tuple[float, float, float]],
         offset: float,
+        near_fraction: float = 0.0,
+        start_tcp_pos_b: tuple[float, float, float] | None = None,
+        grasp_offset: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        near_height_range: tuple[float, float] = (0.0, 0.10),
+        near_lateral: float = 0.003,
         drone_cfg: SceneEntityCfg = SceneEntityCfg("drone"),
         robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     ):
@@ -63,8 +81,19 @@ class reset_drone_at_targets(ManagerTermBase):
         num = len(env_ids)
 
         index = torch.randint(len(self.targets), (num,), device=env.device)
-        self.target_index[env_ids] = index
         pos_b = self.targets[index] + math_utils.sample_uniform(-offset, offset, (num, 3), env.device)
+        near = torch.rand(num, device=env.device) < near_fraction
+        if near.any():
+            # the drone has the base orientation, so drone-frame offsets are base-frame offsets
+            tcp = torch.tensor(start_tcp_pos_b, device=env.device)
+            grasp = torch.tensor(grasp_offset, device=env.device)
+            near_pos = (tcp - grasp).repeat(num, 1)
+            near_pos[:, :2] += math_utils.sample_uniform(-near_lateral, near_lateral, (num, 2), env.device)
+            near_pos[:, 2] += math_utils.sample_uniform(*near_height_range, (num,), env.device)
+            pos_b = torch.where(near.unsqueeze(-1), near_pos, pos_b)
+            index = torch.where(near, -1, index)
+        self.target_index[env_ids] = index
+        self.near_start[env_ids] = near
         self.reset_pos_b[env_ids] = pos_b
 
         base_pos = robot.data.root_pos_w.torch[env_ids]

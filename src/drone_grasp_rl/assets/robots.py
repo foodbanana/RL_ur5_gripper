@@ -81,6 +81,10 @@ UNDER_DRONE_JOINT_POS = {
 }
 """Episode start pose ``under_drone`` (t10 wrist mount): gripper pointing +z, TCP 0.305 m below the grasp."""
 
+UNDER_DRONE_TCP_POS_B = (0.6173, -0.0010, 0.4335)
+"""TCP position in the base frame at ``under_drone`` [m] (URDF forward kinematics; matches the simulation within
+0.6 mm, see ``scripts/check_assets.py``)."""
+
 HOME_JOINT_POS = {
     "shoulder_pan_joint": 0.0,
     "shoulder_lift_joint": -1.5708,

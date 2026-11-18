@@ -178,10 +178,40 @@ class EventCfg:
 
 @configclass
 class RewardsCfg:
-    """Placeholder rewards so the task runs end to end. The grasp rewards come in the next step."""
+    """Grasp rewards. The reward manager multiplies each term by the step interval (1/30 s), except the terminal
+    bonuses, which pay their weight exactly once. Effective size per episode in brackets.
 
-    approach = RewTerm(func=mdp.tcp_drone_distance_tanh, weight=1.0, params={"std": 0.1})
+    Sources: progress reward from Isaac Lab core lift; staged weights and the alignment idea from the cabinet task;
+    contact, hold and failure thresholds from the data collection repo's grasp judge; action/joint penalties from
+    contrib lift. Weights without a reference (close_near, drone_push) start small.
+    """
+
+    # approach: 1 per 5 mm of new path progress, before the grasp [about 0.3 m / 5 mm * 5 / 30 = 10]
+    approach = RewTerm(func=mdp.approach_progress, weight=5.0)
+    # last centimeters: dense, while on the line below the drone [2 per second at the grasp point]
+    approach_fine = RewTerm(func=mdp.approach_fine, weight=2.0)
+    # gripper axes vs drone axes; a penalty since the start pose is already aligned [0 when aligned]
+    misalign = RewTerm(func=mdp.misalignment, weight=-1.0)
+    # both finger sides on the drone, until the motor stop [about 2 per second, at most about 1.5 s]
+    finger_contact = RewTerm(func=mdp.finger_contact, weight=2.0)
+    # commanding close near the waist, before the grasp [about 2 per second for the ~0.5 s until contact]
+    # (an empty_close penalty for closing far away taught the policy never to close; the judge still counts it)
+    close_near = RewTerm(func=mdp.close_near, weight=2.0)
+    # still holding after the motor stop [4 per second, 2.5 s = 10]
+    hold = RewTerm(func=mdp.hold, weight=4.0)
+    # judge says held [+20 once]; any failure termination [-5 once]
+    success = RewTerm(func=mdp.terminal_bonus, weight=20.0, params={"term_keys": "grasp_success"})
+    failure = RewTerm(
+        func=mdp.terminal_bonus,
+        weight=-5.0,
+        params={"term_keys": ["grasp_failed", "drone_knocked", "protective_stop"]},
+    )
+    # pushing the floating drone before the grasp, per m beyond 5 mm
+    drone_push = RewTerm(func=mdp.drone_push, weight=-20.0)
+    # smooth motion (contrib lift values; MJWarp does not enforce joint velocity limits)
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1.0e-3)
+    joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-1.0e-4, params={"asset_cfg": MISSING})
+    joint_limits = RewTerm(func=mdp.joint_pos_limits, weight=-1.0, params={"asset_cfg": MISSING})
 
 
 @configclass
@@ -221,3 +251,5 @@ class GraspEnvCfg(ManagerBasedRLEnvCfg):
     def play_mode(self):
         super().play_mode()
         self.scene.ee_frame.debug_vis = True
+        # play and evaluation use the real start distribution, without the near-grasp curriculum
+        self.events.reset_drone.params["near_fraction"] = 0.0

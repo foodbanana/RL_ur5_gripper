@@ -3,8 +3,8 @@
 Reinforcement-learning tasks for drone grasping, built as an installable
 [Isaac Lab](https://github.com/isaac-sim/IsaacLab) 3.0 task package (Isaac Sim 6.2, uv `src` layout).
 
-> **Status:** the UR5 drone grasp task is registered with its scene, resets, sensors and actions.
-> Its rewards are placeholders until the grasp MDP is added.
+> **Status:** the UR5 drone grasp task trains on PhysX. The first working policy holds the drone in 23 % of
+> episodes from the 25 reference starts; training and tuning continue.
 
 Registered tasks:
 - `DroneGraspRl-Grasp-UR5`: UR5 + ROBOTIS RH-P12-RN(A) grasps a hovering Iris drone from below
@@ -108,6 +108,7 @@ scripts/
 ├── check_assets.py          # robot and drone checks: TCP, drives, gripper, mimic, hover
 ├── check_task.py            # task checks: reset positions, mocap model, action contract, contact sensors, grasp
 ├── scripted_grasp.py        # IK expert runs the full episode protocol and reports the judge's outcomes
+├── eval_policy.py           # trained checkpoint: judge outcomes and approach geometry on the 25 reference starts
 └── fix_isaacsim_fastfinder.sh, list_envs.py
 tests/                 # registration test
 ```

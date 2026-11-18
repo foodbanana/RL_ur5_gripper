@@ -58,11 +58,25 @@ def main():
     torch.manual_seed(0)
     env_cfg, _ = resolve_task_config(TASK, "")
     env_cfg.scene.num_envs = args_cli.num_envs
+    env_cfg.events.reset_drone.params["near_fraction"] = 0.0  # the 25 reference positions only, no curriculum
+    env_cfg.actions.gripper_action.latch_close = False  # the close check opens the gripper again
     env_cfg.episode_length_s = 60.0  # no time-out resets during the checks
     # No success/failure resets either: the grasp check closes on a teleported drone. The judge, which also stops
     # the drone motors, is checked by scripts/scripted_grasp.py.
     for name in ("grasp_success", "grasp_failed", "drone_knocked", "protective_stop"):
         setattr(env_cfg.terminations, name, None)
+    # the grasp rewards read the judge, which is off
+    for name in (
+        "approach",
+        "approach_fine",
+        "finger_contact",
+        "close_near",
+        "hold",
+        "success",
+        "failure",
+        "drone_push",
+    ):
+        setattr(env_cfg.rewards, name, None)
     if args_cli.device is not None:
         env_cfg.sim.device = args_cli.device
     args_cli.device = env_cfg.sim.device

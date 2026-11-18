@@ -22,7 +22,8 @@ class PPORunnerCfg(RslRlOnPolicyRunnerCfg):
         hidden_dims=[256, 128, 64],
         activation="elu",
         obs_normalization=True,
-        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=1.0),
+        # 0.5: with 1.0 the arm steps were too noisy to slide the open fingers past the drone
+        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=0.5),
     )
     critic = RslRlMLPModelCfg(
         hidden_dims=[256, 128, 64],
@@ -33,12 +34,16 @@ class PPORunnerCfg(RslRlOnPolicyRunnerCfg):
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,
-        entropy_coef=0.006,
+        # 0.006 let the action std grow (0.84 -> 1.13) while the approach stalled; 0.001 let it collapse to 0.05
+        # before the gripper ever closed near the drone
+        entropy_coef=0.003,
         num_learning_epochs=5,
         num_mini_batches=4,
         learning_rate=1.0e-4,
         schedule="adaptive",
-        gamma=0.98,
+        # 0.995 at 30 Hz = about 6.7 s horizon. With 0.98 (1.7 s) the success paid ~4.5 s after the close command
+        # was discounted to ~6 %, and the policy farmed the per-step proximity rewards instead of grasping.
+        gamma=0.995,
         lam=0.95,
         desired_kl=0.01,
         max_grad_norm=1.0,

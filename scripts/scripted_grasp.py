@@ -59,6 +59,7 @@ def main():
     torch.manual_seed(args_cli.seed)
     env_cfg, _ = resolve_task_config(TASK, "")
     env_cfg.scene.num_envs = args_cli.num_envs
+    env_cfg.events.reset_drone.params["near_fraction"] = 0.0  # the 25 reference positions only, no curriculum
     env_cfg.seed = args_cli.seed
     if args_cli.device is not None:
         env_cfg.sim.device = args_cli.device
@@ -88,6 +89,7 @@ def main():
 
         state = torch.full((n,), PRE, dtype=torch.long, device=dev)
         steps = torch.zeros(n, dtype=torch.long, device=dev)
+        returns = torch.zeros(n, device=dev)
         done_once = torch.zeros(n, dtype=torch.bool, device=dev)
         outcomes = [None] * n
         targets = reset_term.target_index.clone()
@@ -130,7 +132,8 @@ def main():
                 action[:, :6] *= (state != CLOSE).unsqueeze(-1)
                 action[:, 6] = torch.where(state == CLOSE, -1.0, 1.0)
 
-                env.step(action)
+                _, reward, _, _, _ = env.step(action)
+                returns += reward
                 steps += 1
                 for i in env.reset_buf.nonzero(as_tuple=False).squeeze(-1).tolist():
                     if not done_once[i]:
@@ -147,10 +150,15 @@ def main():
                                 f" (settle {1000 * m[0]:.1f} mm, last 0.5 s {1000 * m[1]:.2f} mm,"
                                 f" rot {torch.rad2deg(m[2]):.1f} deg)"
                             )
-                        outcomes[i] = (int(targets[i]), label, int(steps[i]) * env.step_dt)
+                        outcomes[i] = (
+                            int(targets[i]),
+                            f"{label}, return {float(returns[i]):.1f}",
+                            int(steps[i]) * env.step_dt,
+                        )
                         done_once[i] = True
                     state[i] = PRE
                     steps[i] = 0
+                    returns[i] = 0.0
                     targets[i] = reset_term.target_index[i]
 
         names = [
@@ -158,7 +166,7 @@ def main():
         ]
         for i, (t, label, sec) in enumerate(outcomes):
             print(f"[scripted] env {i:2d} target {names[t]:14s} after {sec:5.2f} s -> {label}")
-        count = Counter(label.split(" ")[0] for _, label, _ in outcomes)
+        count = Counter(label.split(" ")[0].rstrip(",") for _, label, _ in outcomes)
         held_times = [sec for _, label, sec in outcomes if label.startswith("held")]
         mean_time = sum(held_times) / max(1, len(held_times))
         print(f"[scripted] outcomes: {dict(count)}; held {count['held']}/{n}; mean episode {mean_time:.2f} s when held")

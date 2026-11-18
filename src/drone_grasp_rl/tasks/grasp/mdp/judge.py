@@ -164,7 +164,7 @@ class grasp_judge(ManagerTermBase):
         # stays around 0.6 rad/s in PhysX while the angle does not move.
         speed = (angle - self.prev_angle).abs() / env.step_dt
         self.prev_angle = angle.clone()
-        closing = env.action_manager.get_term(gripper_action).raw_actions[:, 0] < 0
+        closing = env.action_manager.get_term(gripper_action).closing
         right, left = self.finger_forces()
         rel_pos, rel_quat = self.drone_in_tcp()
         empty_angle = math.radians(empty_angle_deg)

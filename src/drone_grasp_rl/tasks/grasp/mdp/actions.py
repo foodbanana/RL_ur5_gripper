@@ -132,6 +132,11 @@ class ProfiledBinaryJointPositionAction(BinaryJointPositionAction):
     Like the real gripper's position profile: the command picks the open or close position, and the
     joint target sent to the drive moves toward it by ``profile_velocity * physics_dt`` every physics
     step. A step change of the target would snap the fingers shut much faster than the real gripper.
+
+    With ``latch_close``, the first close command holds until the episode ends (one grasp attempt per episode,
+    as in the data collection protocol). Closing takes 0.6-2.2 s of continuous command; a policy exploring with
+    independent noise per step flips the command every 33 ms and the fingers never close, so it could never
+    discover a grasp. :attr:`closing` is the command in force.
     """
 
     cfg: ProfiledBinaryJointPositionActionCfg
@@ -141,11 +146,23 @@ class ProfiledBinaryJointPositionAction(BinaryJointPositionAction):
         self._max_step = cfg.profile_velocity * env.physics_dt
         self._target = self._open_command.repeat(self.num_envs, 1)
         self._joint_ids_torch = wp.to_torch(self._joint_ids).long()
+        self._closing = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
     @property
     def target(self) -> torch.Tensor:
         """Current joint position target sent to the drive, shape (num_envs, num_joints)."""
         return self._target
+
+    @property
+    def closing(self) -> torch.Tensor:
+        """The close command is in force (after the latch), shape (num_envs,)."""
+        return self._closing
+
+    def process_actions(self, actions: torch.Tensor):
+        self._raw_actions[:] = actions
+        close = actions[:, 0] < 0
+        self._closing = self._closing | close if self.cfg.latch_close else close
+        self._processed_actions = torch.where(self._closing.unsqueeze(-1), self._close_command, self._open_command)
 
     def apply_actions(self):
         self._target += (self._processed_actions - self._target).clamp(-self._max_step, self._max_step)
@@ -158,6 +175,7 @@ class ProfiledBinaryJointPositionAction(BinaryJointPositionAction):
         self._target[ids] = self._asset.data.default_joint_pos.torch[ids][:, self._joint_ids_torch]
         self._processed_actions = self._processed_actions.clone()
         self._processed_actions[ids] = self._target[ids]
+        self._closing[ids] = False
 
 
 @configclass
@@ -168,3 +186,6 @@ class ProfiledBinaryJointPositionActionCfg(BinaryJointPositionActionCfg):
 
     profile_velocity: float = MISSING
     """Speed of the position target toward the open or close position [rad/s or m/s]."""
+
+    latch_close: bool = False
+    """Keep closing after the first close command until the episode ends."""
