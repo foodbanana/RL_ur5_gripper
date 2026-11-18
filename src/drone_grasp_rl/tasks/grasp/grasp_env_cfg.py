@@ -25,7 +25,6 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import FrameTransformerCfg
 from isaaclab.utils import configclass
-from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 from isaaclab.visualizers import VisualizerCfg
 
 from drone_grasp_rl.assets.drones import IRIS_CFG
@@ -97,7 +96,8 @@ class ActionsCfg:
 
 @configclass
 class ObservationsCfg:
-    """``policy`` holds only what the real robot can measure; ``critic`` adds simulator-only state."""
+    """``policy`` holds only what the real robot can measure (arm, gripper, mocap drone pose); ``critic`` adds
+    simulator-only state (exact drone pose and velocity, finger contact forces)."""
 
     @configclass
     class PolicyCfg(ObsGroup):
@@ -105,13 +105,8 @@ class ObservationsCfg:
         arm_joint_vel = ObsTerm(func=mdp.joint_vel, params={"asset_cfg": MISSING})
         gripper_pos = ObsTerm(func=mdp.joint_pos, params={"asset_cfg": MISSING})
         tcp_pos = ObsTerm(func=mdp.frame_pos_b, params={"frame_name": "tcp"})
-        # On the real robot the drone pose comes from motion capture or a camera estimate.
-        drone_pos = ObsTerm(
-            func=mdp.frame_pos_b, params={"frame_name": "drone"}, noise=Unoise(n_min=-0.005, n_max=0.005)
-        )
-        drone_quat = ObsTerm(
-            func=mdp.frame_quat_b, params={"frame_name": "drone"}, noise=Unoise(n_min=-0.01, n_max=0.01)
-        )
+        # The real robot gets the drone pose from motion capture: latency, calibration bias and noise.
+        drone_pose = ObsTerm(func=mdp.mocap_drone_pose_b)
         actions = ObsTerm(func=mdp.last_action)
 
         def __post_init__(self):
@@ -120,6 +115,8 @@ class ObservationsCfg:
 
     @configclass
     class CriticCfg(ObsGroup):
+        drone_pos_true = ObsTerm(func=mdp.frame_pos_b, params={"frame_name": "drone"})
+        drone_quat_true = ObsTerm(func=mdp.frame_quat_b, params={"frame_name": "drone"})
         drone_lin_vel = ObsTerm(func=mdp.root_lin_vel_w, params={"asset_cfg": SceneEntityCfg("drone")})
         drone_ang_vel = ObsTerm(func=mdp.root_ang_vel_w, params={"asset_cfg": SceneEntityCfg("drone")})
         finger_contact = ObsTerm(func=mdp.contact_forces, params={"sensor_names": MISSING}, clip=(0.0, 50.0))

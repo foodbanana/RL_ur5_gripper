@@ -5,6 +5,9 @@ Runs ``DroneGraspRl-Grasp-UR5`` with scripted actions and prints PASS/FAIL per c
 1. targets   every drone starts within the offset of one of the 25 reference positions (base frame)
 2. clear     no finger touches the drone after the reset
 3. hold      with zero actions the arm stays in ``under_drone`` and the drone stays in place for 2 s
+3b. mocap    the policy's drone pose differs from the true pose like the motion-capture model: per-axis
+             noise about 1 mm, offset within the calibration bias, and while the drone moves at 0.1 m/s a
+             lag of about 2.5 mm (20 ms latency + half of the 10 ms sample period)
 4. arm       an arm action moves each arm joint to ``default + scale * action``; the gripper stays open
 5. close     a close command shuts the empty gripper past 62 deg; an open command opens it again
 6. grasp     with the drone waist placed at the TCP, closing at the gripper profile speed stops before
@@ -129,6 +132,44 @@ def main():
                 "hold",
                 bool(tcp_d < 1.0 and drone_d < 1.0 and q_err < 0.2),
                 f"TCP drift={tcp_d:.2f} mm, drone drift={drone_d:.2f} mm, arm={q_err:.3f} deg",
+            )
+        )
+        # 3b. mocap model of the policy's drone pose
+        names = env.observation_manager.active_terms["policy"]
+        dims = env.observation_manager.group_obs_term_dim["policy"]
+        off = sum(d[0] for d in dims[: names.index("drone_pose")])
+
+        def mocap_pos_err():  # (N, 3) observed - true drone position [m]
+            return env.obs_buf["policy"][:, off : off + 3] - drone_b()
+
+        rest = []
+        for _ in range(steps_per_s):
+            run(open_action, 1)
+            rest.append(mocap_pos_err())
+        rest = torch.stack(rest)  # (T, N, 3)
+        noise_mm = 1000 * rest.std(dim=0).mean()
+        bias_mm = 1000 * rest.mean(dim=0).abs().max()
+        rot_err = torch.rad2deg(
+            math_utils.quat_error_magnitude(
+                env.obs_buf["policy"][:, off + 3 : off + 7], frames.data.target_quat_source.torch[:, drone_i]
+            )
+        ).max()
+        drone.write_root_velocity_to_sim_index(
+            root_velocity=torch.tensor([[0.1, 0.0, 0.0, 0.0, 0.0, 0.0]], device=dev).repeat(n, 1)
+        )
+        moving = []
+        for _ in range(10):
+            run(open_action, 1)
+            moving.append(mocap_pos_err())
+        drone.write_root_velocity_to_sim_index(root_velocity=torch.zeros(n, 6, device=dev))
+        lag_mm = -1000 * (torch.stack(moving).mean(dim=0) - rest.mean(dim=0))[:, 0].mean()
+        ok = bool(0.7 < noise_mm < 1.3 and bias_mm < 2.5 and rot_err < 1.5 and 2.0 < lag_mm < 3.0)
+        results.append(
+            (
+                "mocap",
+                ok,
+                f"noise={noise_mm:.2f} mm/axis, max bias={bias_mm:.2f} mm, max rot err={rot_err:.2f} deg, "
+                f"lag at 0.1 m/s={lag_mm:.2f} mm (expect 2.5)",
             )
         )
         # 4. arm action contract: +0.1 action on every arm joint
