@@ -11,6 +11,11 @@ logs/
 outputs/
 videos/
 wandb/
+datasets/
+recordings/
+anim_recordings/
+.pretrained_checkpoints/
+*.nsys-rep
 
 .vscode/settings.json
 .vscode/launch.json
