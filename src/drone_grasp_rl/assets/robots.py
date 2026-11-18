@@ -52,6 +52,25 @@ TCP_OFFSET_POS = (0.0, 0.0, 0.11)
 FINGER_BODY_NAMES = ["rh_p12_rn_r1", "rh_p12_rn_r2", "rh_p12_rn_l1", "rh_p12_rn_l2"]
 """Finger links (contact sensors, friction material)."""
 
+BASE_BODY_NAME = "robot_mount"
+"""Articulation root (URDF root link). Its frame is the robot base frame used for the drone targets."""
+
+_WRIST_3 = (
+    "Geometry/robot_mount/base_link/base_link_inertia/shoulder_link/upper_arm_link/forearm_link"
+    "/wrist_1_link/wrist_2_link/wrist_3_link"
+)
+_GRIPPER_BASE = f"{_WRIST_3}/flange/tool0/wrist_mount/gripper_bracket/rh_p12_rn_base"
+BODY_PRIM_PATHS = {
+    BASE_BODY_NAME: "Geometry/robot_mount",
+    "wrist_3_link": _WRIST_3,
+    TCP_BODY_NAME: _GRIPPER_BASE,
+    "rh_p12_rn_r1": f"{_GRIPPER_BASE}/rh_p12_rn_r1",
+    "rh_p12_rn_r2": f"{_GRIPPER_BASE}/rh_p12_rn_r1/rh_p12_rn_r2",
+    "rh_p12_rn_l1": f"{_GRIPPER_BASE}/rh_p12_rn_l1",
+    "rh_p12_rn_l2": f"{_GRIPPER_BASE}/rh_p12_rn_l1/rh_p12_rn_l2",
+}
+"""Body prim paths below the robot prim (sensors need the full nested path of the converted USD)."""
+
 UNDER_DRONE_JOINT_POS = {
     "shoulder_pan_joint": -0.1889,
     "shoulder_lift_joint": -1.0776,

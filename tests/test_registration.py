@@ -18,6 +18,11 @@ def test_task_registrations():
             "env_cfg_entry_point": "drone_grasp_rl.tasks.balance.config.cartpole.env_cfg:BalanceEnvCfg",
             "default_agent": "rsl_rl",
         },
+        "DroneGraspRl-Grasp-UR5": {
+            "entry_point": "isaaclab.envs:ManagerBasedRLEnv",
+            "env_cfg_entry_point": "drone_grasp_rl.tasks.grasp.config.ur5.env_cfg:UR5GraspEnvCfg",
+            "default_agent": "rsl_rl",
+        },
     }
 
     for task_id, expected_values in expected.items():

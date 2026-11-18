@@ -42,7 +42,6 @@ from isaaclab.utils import configclass, instantiate, replace  # noqa: E402
 
 from drone_grasp_rl.assets import DRONE_GRASP_RL_ASSETS_DIR  # noqa: E402
 from drone_grasp_rl.assets.drones import DRONE_MASS, IRIS_CFG  # noqa: E402
-from drone_grasp_rl.physics import PHYSICS_VARIANT, SIM_DT, DroneGraspPhysicsCfg  # noqa: E402
 from drone_grasp_rl.assets.robots import (  # noqa: E402
     ARM_JOINT_NAMES,
     FINGER_BODY_NAMES,
@@ -55,6 +54,7 @@ from drone_grasp_rl.assets.robots import (  # noqa: E402
     UNDER_DRONE_JOINT_POS,
     UR5_RHP12_CFG,
 )
+from drone_grasp_rl.physics import PHYSICS_VARIANT, SIM_DT, DroneGraspPhysicsCfg  # noqa: E402
 
 TABLE_TOP_Z = 0.762
 """Table top height = robot base height (scene_drone.yaml)."""
@@ -139,7 +139,9 @@ def urdf_fk(urdf_path: Path, joint_pos: dict[str, float], tip: str) -> np.ndarra
 
 def main():
     with launch_simulation(cfg=physics_cfg, launcher_args=args_cli):
-        sim = sim_utils.SimulationContext(sim_utils.SimulationCfg(dt=SIM_DT, device=args_cli.device, physics=physics_cfg))
+        sim = sim_utils.SimulationContext(
+            sim_utils.SimulationCfg(dt=SIM_DT, device=args_cli.device, physics=physics_cfg)
+        )
         sim.set_camera_view([1.8, -1.6, 1.8], [0.4, 0.0, 1.2])
         scene = instantiate(CheckSceneCfg(num_envs=1, env_spacing=4.0))
         sim.reset()
@@ -163,7 +165,9 @@ def main():
                 scene.update(SIM_DT)
 
         # 1. names
-        missing = [n for n in ARM_JOINT_NAMES + [GRIPPER_JOINT_NAME] + GRIPPER_MIMIC_JOINT_NAMES if n not in robot.joint_names]
+        missing = [
+            n for n in ARM_JOINT_NAMES + [GRIPPER_JOINT_NAME] + GRIPPER_MIMIC_JOINT_NAMES if n not in robot.joint_names
+        ]
         missing += [n for n in [TCP_BODY_NAME] + FINGER_BODY_NAMES if n not in robot.body_names]
         print(f"[check] backend={args_cli.backend} joints={robot.joint_names}")
         print(f"[check] bodies={robot.body_names}")
@@ -177,7 +181,9 @@ def main():
         hover_force = torch.zeros(1, drone.num_bodies, 3, device=sim.device)
         hover_force[0, :, 2] = drone.data.body_mass.torch[0] * 9.81
         total_mass = float(drone.data.body_mass.torch[0].sum())
-        results.append(("drone_mass", abs(total_mass - DRONE_MASS) < 1e-3, f"total={total_mass:.4f} kg body={drone.body_names}"))
+        results.append(
+            ("drone_mass", abs(total_mass - DRONE_MASS) < 1e-3, f"total={total_mass:.4f} kg body={drone.body_names}")
+        )
 
         # Start from a clean state: sim.reset() may already have stepped without the hover force.
         robot.write_joint_position_to_sim_index(position=robot.data.default_joint_pos.torch.clone())
@@ -193,12 +199,19 @@ def main():
         step(240, gripper_target=0.0)
         root = robot.data.root_pose_w.torch[0]
         body = robot.data.body_pose_w.torch[0, tcp_id]
-        tcp_w = body[:3] + math_utils.quat_apply(body[3:7].unsqueeze(0), torch.tensor([TCP_OFFSET_POS], device=sim.device))[0]
-        tcp_b, _ = math_utils.subtract_frame_transforms(root[:3].unsqueeze(0), root[3:7].unsqueeze(0), tcp_w.unsqueeze(0))
+        tcp_w = (
+            body[:3]
+            + math_utils.quat_apply(body[3:7].unsqueeze(0), torch.tensor([TCP_OFFSET_POS], device=sim.device))[0]
+        )
+        tcp_b, _ = math_utils.subtract_frame_transforms(
+            root[:3].unsqueeze(0), root[3:7].unsqueeze(0), tcp_w.unsqueeze(0)
+        )
         tcp_b = tcp_b[0].cpu().numpy()
         tcp_urdf = urdf_fk(URDF_PATH, UNDER_DRONE_JOINT_POS, URDF_TCP_LINK)
         err_mm = float(np.linalg.norm(tcp_b - tcp_urdf) * 1000)
-        results.append(("tcp_fk", err_mm < 2.0, f"sim={np.round(tcp_b, 4)} urdf={np.round(tcp_urdf, 4)} err={err_mm:.2f} mm"))
+        results.append(
+            ("tcp_fk", err_mm < 2.0, f"sim={np.round(tcp_b, 4)} urdf={np.round(tcp_urdf, 4)} err={err_mm:.2f} mm")
+        )
         q = robot.data.joint_pos.torch[0]
         q_des = torch.tensor([UNDER_DRONE_JOINT_POS[n] for n in ARM_JOINT_NAMES], device=sim.device)
         hold_err = float(torch.rad2deg((q[arm_ids] - q_des).abs().max()))
@@ -215,7 +228,9 @@ def main():
                 t_62 = (k + 1) * SIM_DT
         closed_deg = math.degrees(float(robot.data.joint_pos.torch[0, g_id]))
         results.append(("close", 62.0 <= closed_deg <= 65.1, f"final={closed_deg:.2f} deg, reached 62 deg at {t_62} s"))
-        results.append(("mimic", math.degrees(mimic_err) < 1.5, f"max |follower - leader|={math.degrees(mimic_err):.3f} deg"))
+        results.append(
+            ("mimic", math.degrees(mimic_err) < 1.5, f"max |follower - leader|={math.degrees(mimic_err):.3f} deg")
+        )
 
         # 6. open
         target = GRIPPER_CLOSED_POS
@@ -228,7 +243,13 @@ def main():
         # 7. hover: drift since spawn after all of the above (about 10 s with the compensating wrench)
         d_pose = drone.data.root_pose_w.torch[0]
         drift_mm = float(torch.linalg.norm(d_pose[:3] - d_root[0, :3]) * 1000)
-        tilt_deg = math.degrees(float(math_utils.quat_error_magnitude(d_pose[3:7].unsqueeze(0), torch.tensor([[0.0, 0.0, 0.0, 1.0]], device=sim.device))[0]))
+        tilt_deg = math.degrees(
+            float(
+                math_utils.quat_error_magnitude(
+                    d_pose[3:7].unsqueeze(0), torch.tensor([[0.0, 0.0, 0.0, 1.0]], device=sim.device)
+                )[0]
+            )
+        )
         results.append(("hover", drift_mm < 5.0 and tilt_deg < 1.0, f"drift={drift_mm:.2f} mm tilt={tilt_deg:.3f} deg"))
 
         print("[check] ---------------- results ----------------")

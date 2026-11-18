@@ -29,15 +29,29 @@ class DroneGraspPhysicsCfg(PresetCfg):
     ``physx`` is an alias of ``isaacsim_physx`` so the automatic selector never falls back to OvPhysX,
     which this project does not install.
 
-    MJWarp uses the ``implicitfast`` integrator. With the default ``euler`` integrator the high PhysX
-    gains made the wrist joints oscillate (wrist_3 std 12.6 deg holding a pose); with ``implicitfast``
-    the same gains hold within 0.03 deg, so no per-backend gains are needed.
+    MJWarp settings, each measured with ``scripts/check_assets.py`` / ``scripts/check_task.py``:
+
+    - ``implicitfast`` integrator: with the default ``euler`` the high PhysX gains made the wrist joints
+      oscillate (wrist_3 std 12.6 deg holding a pose); ``implicitfast`` holds within 0.03 deg with the
+      same gains, so no per-backend gains are needed.
+    - ``nconmax``/``njmax``: the drone body alone has 30 convex pieces; with the default capacity the
+      broadphase overflowed and dropped the finger-drone contacts.
+    - elliptic friction cone, ``impratio`` 10 and 2 substeps (the Isaac Lab "dexterous manipulation"
+      starting profile): with the defaults (pyramidal, 1, 1 substep) closing the gripper on the
+      gravity-compensated drone squeezed it out upward. Now the grasp holds, with the drone 7 mm higher
+      and the fingers at 28 deg instead of PhysX's 1 mm and 17 deg (softer MuJoCo contacts).
     """
 
     isaacsim_physx: PhysxCfg = PhysxCfg()
     physx: PhysxCfg = isaacsim_physx
     newton_mjwarp: NewtonCfg = NewtonCfg(
-        solver_cfg=MJWarpSolverCfg(integrator="implicitfast"),
-        num_substeps=1,
+        solver_cfg=MJWarpSolverCfg(
+            integrator="implicitfast",
+            nconmax=200,
+            njmax=600,
+            cone="elliptic",
+            impratio=10.0,
+        ),
+        num_substeps=2,
     )
     default: PhysxCfg = isaacsim_physx

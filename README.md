@@ -3,11 +3,12 @@
 Reinforcement-learning tasks for drone grasping, built as an installable
 [Isaac Lab](https://github.com/isaac-sim/IsaacLab) 3.0 task package (Isaac Sim 6.2, uv `src` layout).
 
-> **Status:** only the template task is registered so far. Drone grasping tasks will be added under
-> `src/drone_grasp_rl/tasks`.
+> **Status:** the UR5 drone grasp task is registered with its scene, resets, sensors and actions.
+> Its rewards are placeholders until the grasp MDP is added.
 
 Registered tasks:
-- `DroneGraspRl-Balance-Cartpole`
+- `DroneGraspRl-Grasp-UR5`: UR5 + ROBOTIS RH-P12-RN(A) grasps a hovering Iris drone from below
+- `DroneGraspRl-Balance-Cartpole`: template example
 
 <br>
 
@@ -54,28 +55,30 @@ Training is working when the last log shows `Mean episode length: 300.00`.
 
 ## Run the tasks
 
-Two physics backends are available. Newton is the default and does not need Isaac Sim. PhysX runs through Isaac Sim.
+Two physics backends are available. For `DroneGraspRl-Grasp-UR5` **PhysX is the default** (the robot gains come
+from a PhysX-tuned setup), so its commands need `--extra isaacsim`. Newton MJWarp runs without Isaac Sim when you
+pass `physics=newton_mjwarp`. (The template `DroneGraspRl-Balance-Cartpole` defaults to Newton.)
 
 ```bash
-TASK=DroneGraspRl-Balance-Cartpole
+TASK=DroneGraspRl-Grasp-UR5
+
+# PhysX backend (default, Isaac Sim)
+uv run --extra isaacsim isaaclab train --rl_library rsl_rl --task $TASK
+uv run --extra isaacsim isaaclab play  --rl_library rsl_rl --task $TASK --checkpoint latest --num_envs 16 --viz kit
 
 # Newton backend
-uv run isaaclab train --rl_library rsl_rl --task $TASK
-uv run isaaclab play  --rl_library rsl_rl --task $TASK --checkpoint latest --num_envs 16 --viz newton_gl
-
-# PhysX backend (Isaac Sim)
-uv run --extra isaacsim isaaclab train --rl_library rsl_rl --task $TASK physics=isaacsim_physx
-uv run --extra isaacsim isaaclab play  --rl_library rsl_rl --task $TASK --checkpoint latest --num_envs 16 \
-    physics=isaacsim_physx --viz kit
+uv run isaaclab train --rl_library rsl_rl --task $TASK physics=newton_mjwarp
+uv run isaaclab play  --rl_library rsl_rl --task $TASK --checkpoint latest --num_envs 16 \
+    physics=newton_mjwarp --viz newton_gl
 
 # Run without a trained policy
-uv run isaaclab zero_agent   --task $TASK --num_envs 16
-uv run isaaclab random_agent --task $TASK --num_envs 16
+uv run --extra isaacsim isaaclab zero_agent   --task $TASK --num_envs 16 --viz kit
+uv run                  isaaclab random_agent --task $TASK --num_envs 16 --viz newton_gl physics=newton_mjwarp
 
 # Multi-GPU training and benchmarks
-uv run isaaclab train_multigpu --rl_library rsl_rl --task $TASK --num_gpus 2
-uv run isaaclab benchmark runtime  --task $TASK --num_envs 16 --num_steps 1000
-uv run isaaclab benchmark training --rl_library rsl_rl --task $TASK --max_iterations 10
+uv run --extra isaacsim isaaclab train_multigpu --rl_library rsl_rl --task $TASK --num_gpus 2
+uv run --extra isaacsim isaaclab benchmark runtime  --task $TASK --num_envs 16 --num_steps 1000
+uv run --extra isaacsim isaaclab benchmark training --rl_library rsl_rl --task $TASK --max_iterations 10
 ```
 
 Checkpoints are written to `logs/rsl_rl/<experiment>/<timestamp>/`. `logs/` is git-ignored, so trained policies stay
@@ -91,18 +94,34 @@ features (`rerun`, `wandb`, `skrl`, ...), pass the matching extra from `pyprojec
 
 ```
 src/drone_grasp_rl/
-├── assets/            # asset configs; data/ holds project-owned USD files (Git LFS)
+├── physics.py         # physics backends (PhysX default, Newton MJWarp) and the 120 Hz step
+├── assets/            # robot and drone configs; data/ holds project-owned URDF, meshes and USD (Git LFS)
 └── tasks/
-    └── balance/       # one task family
-        ├── mdp/       # task-wide MDP terms (rewards, observations, ...)
-        └── config/
-            └── cartpole/   # robot-specific scene, registration, agent configs
-scripts/               # helper scripts (Isaac Sim patch, list_envs)
+    ├── grasp/         # drone grasp task family
+    │   ├── grasp_env_cfg.py   # scene, observations, events, rewards shared by all robots
+    │   ├── mdp/               # task terms (drone reset and hold, profiled gripper action, ...)
+    │   └── config/ur5/        # UR5 scene, sensors, actions, registration, agent configs
+    └── balance/       # template example (cart-pole)
+scripts/
+├── convert_assets.py        # URDF -> robot USD (rerun after changing the URDF or meshes)
+├── build_drone_collision.py # drone body collider -> fixed convex pieces (iris_collision.usda)
+├── check_assets.py          # robot and drone checks: TCP, drives, gripper, mimic, hover
+├── check_task.py            # task checks: reset positions, action contract, contact sensors, grasp
+└── fix_isaacsim_fastfinder.sh, list_envs.py
 tests/                 # registration test
 ```
 
-To add another robot, create a sibling of `config/cartpole`. To add another task, create a sibling task-family
-directory next to `balance/`.
+Check the assets and the task on both backends after changing an asset, a gain, or the scene:
+
+```bash
+uv run --extra isaacsim python scripts/check_assets.py --backend isaacsim_physx
+uv run                  python scripts/check_assets.py --backend newton_mjwarp
+uv run --extra isaacsim python scripts/check_task.py physics=isaacsim_physx
+uv run                  python scripts/check_task.py physics=newton_mjwarp
+```
+
+To add another robot, create a sibling of `config/ur5`. To add another task, create a sibling task-family
+directory next to `grasp/`.
 
 <br>
 

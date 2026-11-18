@@ -77,7 +77,10 @@ def main():
     orig = body_frame(trimesh.Trimesh(points, faces))
     union = body_frame(trimesh.util.concatenate(kept))
     w_orig, w_hull = waist_width(orig), waist_width(union)
-    print(f"[collision] CoACD pieces: {len(hulls)}, kept {len(kept)} (dropped {len(hulls) - len(kept)} below {args.min_volume} m^3)")
+    print(
+        f"[collision] CoACD pieces: {len(hulls)}, kept {len(kept)} "
+        f"(dropped {len(hulls) - len(kept)} below {args.min_volume} m^3)"
+    )
     if w_orig and w_hull:
         print(
             f"[collision] waist width at x=0 (0.75x): mesh {1000 * (w_orig[1] - w_orig[0]):.1f} mm "
