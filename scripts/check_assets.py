@@ -37,12 +37,12 @@ import torch  # noqa: E402
 import isaaclab.sim as sim_utils  # noqa: E402
 import isaaclab.utils.math as math_utils  # noqa: E402
 from isaaclab.assets import AssetBaseCfg  # noqa: E402
-from isaaclab.physics import PhysicsCfg  # noqa: E402
 from isaaclab.scene import InteractiveSceneCfg  # noqa: E402
 from isaaclab.utils import configclass, instantiate, replace  # noqa: E402
 
 from drone_grasp_rl.assets import DRONE_GRASP_RL_ASSETS_DIR  # noqa: E402
 from drone_grasp_rl.assets.drones import DRONE_MASS, IRIS_CFG  # noqa: E402
+from drone_grasp_rl.physics import PHYSICS_VARIANT, SIM_DT, DroneGraspPhysicsCfg  # noqa: E402
 from drone_grasp_rl.assets.robots import (  # noqa: E402
     ARM_JOINT_NAMES,
     FINGER_BODY_NAMES,
@@ -56,7 +56,6 @@ from drone_grasp_rl.assets.robots import (  # noqa: E402
     UR5_RHP12_CFG,
 )
 
-SIM_DT = 1.0 / 120.0
 TABLE_TOP_Z = 0.762
 """Table top height = robot base height (scene_drone.yaml)."""
 DRONE_POS_BASE = (0.60, 0.0, 1.50 - TABLE_TOP_Z)
@@ -64,10 +63,9 @@ DRONE_POS_BASE = (0.60, 0.0, 1.50 - TABLE_TOP_Z)
 URDF_PATH = DRONE_GRASP_RL_ASSETS_DIR / "source/ur5_rh_p12_d435i/urdf/ur5_rh_p12_d435i.urdf"
 URDF_TCP_LINK = "rh_p12_rn_tcp"
 
-# Newton reads the MuJoCo physics payload of the converted USD.
-physics_variant = "physx" if args_cli.backend == "isaacsim_physx" else "mujoco"
+physics_cfg = getattr(DroneGraspPhysicsCfg(), args_cli.backend)
 robot_cfg = replace(UR5_RHP12_CFG, prim_path="{ENV_REGEX_NS}/Robot")
-robot_cfg.spawn.variants = {"Physics": physics_variant}
+robot_cfg.spawn.variants = {"Physics": PHYSICS_VARIANT[args_cli.backend]}
 robot_cfg.init_state.pos = (0.0, 0.0, TABLE_TOP_Z)
 drone_cfg = replace(IRIS_CFG, prim_path="{ENV_REGEX_NS}/Drone")
 drone_cfg.init_state.pos = (DRONE_POS_BASE[0], DRONE_POS_BASE[1], DRONE_POS_BASE[2] + TABLE_TOP_Z)
@@ -140,7 +138,7 @@ def urdf_fk(urdf_path: Path, joint_pos: dict[str, float], tip: str) -> np.ndarra
 
 
 def main():
-    with launch_simulation(cfg=PhysicsCfg(), launcher_args=args_cli) as physics_cfg:
+    with launch_simulation(cfg=physics_cfg, launcher_args=args_cli):
         sim = sim_utils.SimulationContext(sim_utils.SimulationCfg(dt=SIM_DT, device=args_cli.device, physics=physics_cfg))
         sim.set_camera_view([1.8, -1.6, 1.8], [0.4, 0.0, 1.2])
         scene = instantiate(CheckSceneCfg(num_envs=1, env_spacing=4.0))

@@ -131,11 +131,16 @@ UR5_RHP12_CFG = ArticulationCfg(
             joint_velocity_limit=6.5,
             # Without armature only ~26 % of the effort limit reaches the fingers (solver convergence).
             armature=0.01,
+            # The URDF gives the gripper joints 0.7 N·m·s/rad of passive damping, stored as newton:damping.
+            # Only Newton reads it (the PhysX-tuned values above ran without it), and on the light distal
+            # links it beat the soft mimic constraint: followers lagged the leader by up to 42 deg.
+            viscous_friction=0.0,
         ),
         "gripper_passive": ImplicitActuatorCfg(
             joint_names_expr=GRIPPER_MIMIC_JOINT_NAMES,
             stiffness=0.0,
             damping=0.0,
+            viscous_friction=0.0,
         ),
     },
     soft_joint_pos_limit_factor=1.0,
