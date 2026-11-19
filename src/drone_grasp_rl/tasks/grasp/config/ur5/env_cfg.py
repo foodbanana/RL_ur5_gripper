@@ -8,9 +8,10 @@
 from isaaclab.assets import ArticulationCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.markers.config import FRAME_MARKER_CFG
 from isaaclab.sensors import ContactSensorCfg, FrameTransformerCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
-from isaaclab.utils import configclass
+from isaaclab.utils import clone, configclass, replace
 
 from isaaclab_tasks.utils import preset
 
@@ -32,6 +33,10 @@ from drone_grasp_rl.physics import PHYSICS_VARIANT
 
 from ... import grasp_env_cfg as grasp
 from ... import mdp
+
+FRAME_MARKER_SMALL_CFG = clone(FRAME_MARKER_CFG)
+FRAME_MARKER_SMALL_CFG.markers["frame"].scale = (0.05, 0.05, 0.05)
+"""Frame axes for ``ee_frame`` in play: one tenth of the default (0.5), about the size of the gripper fingers."""
 
 FINGER_CONTACT_SENSORS = [f"{name.removeprefix('rh_p12_rn_')}_contact" for name in FINGER_BODY_NAMES]
 """One drone-filtered contact sensor per finger link: ``r1_contact``, ``r2_contact``, ``l1_contact``, ``l2_contact``."""
@@ -59,6 +64,7 @@ class UR5GraspSceneCfg(grasp.GraspSceneCfg):
             FrameTransformerCfg.FrameCfg(prim_path="{ENV_REGEX_NS}/Drone/" + DRONE_BODY_NAME, name="drone"),
         ],
         debug_vis=False,
+        visualizer_cfg=replace(FRAME_MARKER_SMALL_CFG, prim_path="/Visuals/EEFrame"),
     )
 
     def __post_init__(self):
