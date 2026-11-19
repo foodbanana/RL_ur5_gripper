@@ -45,6 +45,10 @@ class InterpolatedRelativeJointPositionAction(ActionTerm):
     which is what the protective stop checks.
 
     :attr:`processed_actions` is the absolute goal, i.e. the joint target a dataset records as the action.
+
+    ``delay_steps``: each episode the actions are applied a random whole number of policy steps late (command
+    latency of the real arm on top of the interpolation; the data collection repo measured 47 ms from command to
+    joint motion).
     """
 
     cfg: InterpolatedRelativeJointPositionActionCfg
@@ -64,6 +68,9 @@ class InterpolatedRelativeJointPositionAction(ActionTerm):
         self._start = default.clone()
         self._target = default.clone()
         self._substep = torch.full((self.num_envs, 1), self._decimation, dtype=torch.float32, device=self.device)
+        max_delay = cfg.delay_steps[1]
+        self._history = torch.zeros(self.num_envs, max_delay + 1, len(self._joint_ids), device=self.device)
+        self._delay = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
 
     @property
     def action_dim(self) -> int:
@@ -89,7 +96,10 @@ class InterpolatedRelativeJointPositionAction(ActionTerm):
     def process_actions(self, actions: torch.Tensor):
         self._raw_actions[:] = actions
         self._start = self._target.clone()
-        step = actions.clamp(-1.0, 1.0) * self.cfg.max_step
+        self._history = torch.roll(self._history, 1, dims=1)
+        self._history[:, 0] = actions.clamp(-1.0, 1.0)
+        applied = self._history[torch.arange(self.num_envs, device=self.device), self._delay]
+        step = applied * self.cfg.max_step
         self._goal = torch.max(torch.min(self._goal + step, self._upper), self._lower)
         self._substep.zero_()
 
@@ -108,6 +118,10 @@ class InterpolatedRelativeJointPositionAction(ActionTerm):
         self._start[ids] = default
         self._target[ids] = default
         self._substep[ids] = self._decimation
+        self._history[ids] = 0.0
+        num = self._delay[ids].shape[0]
+        low, high = self.cfg.delay_steps
+        self._delay[ids] = torch.randint(low, high + 1, (num,), device=self.device)
 
 
 @configclass
@@ -124,6 +138,9 @@ class InterpolatedRelativeJointPositionActionCfg(ActionTermCfg):
 
     limit_margin: float = 0.05
     """Distance the goal keeps from the soft joint limits [rad]."""
+
+    delay_steps: tuple[int, int] = (0, 0)
+    """Range of the action delay in policy steps, sampled per episode (inclusive)."""
 
 
 class ProfiledBinaryJointPositionAction(BinaryJointPositionAction):

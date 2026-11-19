@@ -30,6 +30,7 @@ PRESETS = ["static", "small", "mid", "big"]
 
 parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 parser.add_argument("--num_envs", type=int, default=32)
+parser.add_argument("--disturbance", type=float, default=None, help="Override the disturbance force std [N].")
 add_launcher_args(parser)
 parser.set_defaults(device=None)
 args_cli, hydra_args = setup_preset_cli(parser, sys.argv[1:])
@@ -49,6 +50,8 @@ def main():
         if name not in ("action_rate", "joint_vel", "joint_limits"):
             setattr(env_cfg.rewards, name, None)
     env_cfg.actions.drone_hover.judge_term = None
+    if args_cli.disturbance is not None:
+        env_cfg.actions.drone_hover.disturbance_std = args_cli.disturbance
     if args_cli.device is not None:
         env_cfg.sim.device = args_cli.device
     args_cli.device = env_cfg.sim.device
@@ -67,14 +70,16 @@ def main():
             return drone.data.body_link_pose_w.torch[:, body, :3] - hover.reference_pos_w
 
         env.reset()
-        errs, tilts = [], []
+        errs, tilts, axis = [], [], []
         with torch.inference_mode():
             for _ in range(int(6.0 / env.step_dt)):
                 env.step(act)
                 errs.append(error().norm(dim=-1))
+                axis.append(error())
                 z = drone.data.body_link_pose_w.torch[:, body, 3:7]
                 tilts.append(torch.rad2deg(2 * torch.asin(z[:, :2].norm(dim=-1).clamp(max=1.0))))
         errs, tilts = torch.stack(errs), torch.stack(tilts)
+        axis_err = torch.stack(axis)[int(1.0 / env.step_dt) :]  # (T, N, 3) after the first second
         names = [hover.preset_names[i] for i in hover.preset_index.tolist()]
         for preset in PRESETS:
             idx = [i for i, p in enumerate(names) if p == preset]
@@ -82,7 +87,9 @@ def main():
                 continue
             e = 1000 * errs[:, idx]
             print(
-                f"[hover] {preset:6s} ({len(idx):2d} envs): tracking error RMS {e.square().mean().sqrt():.2f} mm, "
+                f"[hover] {preset:6s} ({len(idx):2d} envs): "
+                f"per-axis std {1000 * axis_err[:, idx].std(dim=0).mean():.2f} mm, "
+                f"tracking error RMS {e.square().mean().sqrt():.2f} mm, "
                 f"max {e.max():.2f} mm, max tilt {tilts[:, idx].max():.1f} deg"
             )
         static = torch.tensor([p == "static" for p in names], device=dev)

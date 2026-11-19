@@ -25,6 +25,7 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import FrameTransformerCfg
 from isaaclab.utils import configclass
+from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 from isaaclab.visualizers import VisualizerCfg
 
 from isaaclab_tasks.utils import preset
@@ -59,7 +60,8 @@ DRONE_DEFAULT_POS_BASE = (0.60, 0.0, 0.738)
 def contact_material(asset_cfg: SceneEntityCfg):
     """Startup event giving ``asset_cfg``'s bodies the contact material of the data collection repo.
 
-    PhysX: 0.6 static / 0.5 dynamic friction, no restitution (``drive_gains.yaml``, finger links and object).
+    PhysX: 0.6 static / 0.5 dynamic friction, no restitution (``drive_gains.yaml``, finger links and object), each
+    randomized by x0.7-1.3 per environment.
     Newton keeps its default (friction 1.0): PhysX friction values do not carry over numerically, and with 0.6 the
     closing fingers squeezed the floating drone out of the grasp.
     """
@@ -69,10 +71,13 @@ def contact_material(asset_cfg: SceneEntityCfg):
             mode="startup",
             params={
                 "asset_cfg": asset_cfg,
-                "static_friction_range": (0.6, 0.6),
-                "dynamic_friction_range": (0.5, 0.5),
+                # domain randomization: x0.7-1.3 around 0.6 / 0.5 (OpenAI in-hand manipulation range); the real
+                # finger friction is not measured yet
+                "static_friction_range": (0.42, 0.78),
+                "dynamic_friction_range": (0.35, 0.65),
                 "restitution_range": (0.0, 0.0),
-                "num_buckets": 1,
+                "num_buckets": 64,
+                "make_consistent": True,
             },
         ),
         newton_mjwarp=None,
@@ -127,6 +132,9 @@ class ActionsCfg:
         asset_name="drone",
         body_name=DRONE_BODY_NAME,
         preset_weights={"static": 1.0, "small": 1.0, "mid": 1.0, "big": 1.0},
+        # domain randomization: 0.1 N gives 8.8-10 mm hover jitter per axis (19 mm RMS), as PX4 hovered in the data
+        # collection repo (19.5 mm RMS, 8-10 mm per axis)
+        disturbance_std=0.1,
     )
 
 
@@ -137,12 +145,19 @@ class ObservationsCfg:
 
     @configclass
     class PolicyCfg(ObsGroup):
-        arm_joint_pos = ObsTerm(func=mdp.joint_pos, params={"asset_cfg": MISSING})
-        arm_joint_vel = ObsTerm(func=mdp.joint_vel, params={"asset_cfg": MISSING})
-        gripper_pos = ObsTerm(func=mdp.joint_pos, params={"asset_cfg": MISSING})
-        tcp_pos = ObsTerm(func=mdp.frame_pos_b, params={"frame_name": "tcp"})
+        # small sensor noise (domain randomization)
+        arm_joint_pos = ObsTerm(
+            func=mdp.joint_pos, params={"asset_cfg": MISSING}, noise=Unoise(n_min=-0.002, n_max=0.002)
+        )
+        arm_joint_vel = ObsTerm(
+            func=mdp.joint_vel, params={"asset_cfg": MISSING}, noise=Unoise(n_min=-0.02, n_max=0.02)
+        )
+        gripper_pos = ObsTerm(
+            func=mdp.joint_pos, params={"asset_cfg": MISSING}, noise=Unoise(n_min=-0.005, n_max=0.005)
+        )
+        tcp_pos = ObsTerm(func=mdp.frame_pos_b, params={"frame_name": "tcp"}, noise=Unoise(n_min=-0.001, n_max=0.001))
         # The real robot gets the drone pose from motion capture: latency, calibration bias and noise.
-        drone_pose = ObsTerm(func=mdp.mocap_drone_pose_b)
+        drone_pose = ObsTerm(func=mdp.mocap_drone_pose_b, params={"dropout_rate": 0.2})
         actions = ObsTerm(func=mdp.last_action)
 
         def __post_init__(self):
@@ -170,6 +185,16 @@ class EventCfg:
     """Startup events once; reset events in this order after the scene reset."""
 
     drone_material = contact_material(SceneEntityCfg("drone", body_names=[DRONE_BODY_NAME]))
+    # domain randomization: drone body mass x0.9-1.1 (the flight controller reads the masses every step)
+    drone_mass = EventTerm(
+        func=mdp.randomize_rigid_body_mass,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("drone", body_names=[DRONE_BODY_NAME]),
+            "mass_distribution_params": (0.9, 1.1),
+            "operation": "scale",
+        },
+    )
 
     # Robot to its default (start) pose with matching joint targets, drone to its default state.
     reset_scene = EventTerm(func=mdp.reset_scene_to_default, mode="reset", params={"reset_joint_targets": True})
@@ -260,6 +285,24 @@ class GraspEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.render_interval = self.decimation
         self.sim.physics = DroneGraspPhysicsCfg()
         self.sim.default_visualizer_cfg = VisualizerCfg(eye=(1.8, -1.6, 1.8), lookat=(0.4, 0.0, 1.2))
+
+    def disable_randomization(self):
+        """Turn the domain randomization off (task checks, scripted demos, ``eval_policy.py --no_dr``)."""
+        self.actions.drone_hover.disturbance_std = 0.0
+        self.observations.policy.drone_pose.params["dropout_rate"] = 0.0
+        self.observations.policy.enable_corruption = False
+        arm = self.actions.arm_action
+        if hasattr(arm, "delay_steps"):
+            arm.delay_steps = (0, 0)
+        for name in ("drone_mass", "arm_gains"):
+            setattr(self.events, name, None)
+        for name in ("drone_material", "finger_material"):
+            term = getattr(self.events, name, None)
+            # a resolved config holds the event term itself; an unresolved one the per-backend preset
+            term = getattr(term, "default", term)
+            if term is not None and hasattr(term, "params"):
+                term.params["static_friction_range"] = (0.6, 0.6)
+                term.params["dynamic_friction_range"] = (0.5, 0.5)
 
     def play_mode(self):
         super().play_mode()

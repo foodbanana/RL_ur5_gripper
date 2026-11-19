@@ -63,6 +63,7 @@ def main():
     # a hovering drone: the expert freezes the arm while closing, which only works on a still target (as in the
     # data collection repo, where hover episodes were teleoperated)
     env_cfg.actions.drone_hover.preset_weights = {"static": 1.0}
+    env_cfg.disable_randomization()
     env_cfg.seed = args_cli.seed
     if args_cli.device is not None:
         env_cfg.sim.device = args_cli.device

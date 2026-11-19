@@ -6,6 +6,7 @@
 """UR5 + RH-P12-RN(A) drone grasp environment, starting from ``under_drone`` below the drone."""
 
 from isaaclab.assets import ArticulationCfg
+from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import ContactSensorCfg, FrameTransformerCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
@@ -81,8 +82,9 @@ class UR5ActionsCfg(grasp.ActionsCfg):
 
     # Goal moves at most 0.05 rad per 30 Hz step (1.5 rad/s, the old IK's joint target speed limit), reached by
     # linear interpolation like the old repo's 33 ms command interpolation.
+    # domain randomization: 0-1 extra policy steps (0-33 ms) of command delay per episode
     arm_action = mdp.InterpolatedRelativeJointPositionActionCfg(
-        asset_name="robot", joint_names=ARM_JOINT_NAMES, max_step=0.05
+        asset_name="robot", joint_names=ARM_JOINT_NAMES, max_step=0.05, delay_steps=(0, 1)
     )
     # Only the leader joint is commanded; the three mimic joints follow it. The target moves at the real
     # gripper's profile speed (fully closed in 2.2 s); action < 0 closes and stays closed for the episode.
@@ -116,6 +118,18 @@ class UR5GraspEnvCfg(grasp.GraspEnvCfg):
         )
         self.observations.critic.finger_contact.params["sensor_names"] = FINGER_CONTACT_SENSORS
         self.events.finger_material = grasp.contact_material(SceneEntityCfg("robot", body_names=FINGER_BODY_NAMES))
+        # domain randomization: arm drive stiffness and damping x0.8-1.25 (log-uniform) per environment
+        self.events.arm_gains = EventTerm(
+            func=mdp.randomize_actuator_gains,
+            mode="startup",
+            params={
+                "asset_cfg": SceneEntityCfg("robot", joint_names=ARM_JOINT_NAMES),
+                "stiffness_distribution_params": (0.8, 1.25),
+                "damping_distribution_params": (0.8, 1.25),
+                "operation": "scale",
+                "distribution": "log_uniform",
+            },
+        )
         # Curriculum: half of the training resets put the drone 0-30 cm right above the start TCP, the rest use the
         # reference positions (play: none). 0-10 cm only taught the final rise and close; the approach from the
         # reference positions was lost until the range covered the full 30 cm.

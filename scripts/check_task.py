@@ -64,6 +64,7 @@ def main():
     # drifting at constant velocity. scripts/check_hover.py checks the flight controller.
     env_cfg.actions.drone_hover.preset_weights = {"static": 1.0}
     env_cfg.actions.drone_hover.mode = "float"
+    env_cfg.disable_randomization()
     env_cfg.episode_length_s = 60.0  # no time-out resets during the checks
     # No success/failure resets either: the grasp check closes on a teleported drone. The judge, which also stops
     # the drone motors, is checked by scripts/scripted_grasp.py.

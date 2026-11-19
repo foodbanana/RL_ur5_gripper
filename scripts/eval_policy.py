@@ -43,6 +43,7 @@ parser.add_argument("--checkpoint", type=str, required=True)
 parser.add_argument("--num_envs", type=int, default=128)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--hover", type=str, default="mid", help="Hover preset: static, small, mid, big.")
+parser.add_argument("--no_dr", action="store_true", help="Evaluate without the domain randomization.")
 add_launcher_args(parser)
 parser.set_defaults(device=None)
 args_cli, hydra_args = setup_preset_cli(parser, sys.argv[1:])
@@ -61,6 +62,8 @@ def main():
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.events.reset_drone.params["near_fraction"] = 0.0  # the 25 reference positions only, no curriculum
     env_cfg.actions.drone_hover.preset_weights = {args_cli.hover: 1.0}
+    if args_cli.no_dr:
+        env_cfg.disable_randomization()
     env_cfg.seed = args_cli.seed
     if args_cli.device is not None:
         env_cfg.sim.device = args_cli.device
@@ -114,7 +117,8 @@ def main():
                         hold[i] = judge.hold_metrics[i]
                     done_once[i] = True
 
-        print(f"[eval] checkpoint: {args_cli.checkpoint} (hover preset: {args_cli.hover})")
+        dr = "off" if args_cli.no_dr else "on"
+        print(f"[eval] checkpoint: {args_cli.checkpoint} (hover preset: {args_cli.hover}, randomization {dr})")
         print(f"[eval] outcomes over {n} episodes: {dict(Counter(outcomes))}")
         judged = ~torch.isnan(hold[:, 3])
         if judged.any():

@@ -101,6 +101,8 @@ class mocap_drone_pose_b(ManagerTermBase):
       ``pos_bias`` [m] per axis and a rotation of up to ``rot_bias_deg``. Not measured in the data collection
       repo; the defaults are estimates.
     - noise: Gaussian per sample, ``pos_std`` [m] per axis and ``rot_std_deg`` per rotation axis.
+    - dropout: occlusion of the markers. At ``dropout_rate`` events per second a dropout of ``dropout_duration`` [s]
+      starts, during which the last reading is repeated (as in OpenAI's in-hand manipulation marker dropout).
 
     The noise is part of the sensor model, so it stays on when observation corruption is turned off for play.
     """
@@ -110,6 +112,8 @@ class mocap_drone_pose_b(ManagerTermBase):
         self._pos_bias = torch.zeros(env.num_envs, 3, device=env.device)
         self._rot_bias = torch.zeros(env.num_envs, 4, device=env.device)
         self._rot_bias[:, 3] = 1.0
+        self._last = torch.zeros(env.num_envs, 7, device=env.device)
+        self._dropout_left = torch.zeros(env.num_envs, device=env.device)
 
     def reset(self, env_ids: Sequence[int] | None = None):
         ids = slice(None) if env_ids is None else env_ids
@@ -121,6 +125,7 @@ class mocap_drone_pose_b(ManagerTermBase):
         axis = torch.randn(num, 3, device=self.device)
         angle = math_utils.sample_uniform(0.0, rot_bias, (num,), self.device)
         self._rot_bias[ids] = math_utils.quat_from_angle_axis(angle, axis)
+        self._dropout_left[ids] = 0.0
 
     def __call__(
         self,
@@ -135,6 +140,8 @@ class mocap_drone_pose_b(ManagerTermBase):
         rot_std_deg: float = 0.3,
         pos_bias: float = 0.002,
         rot_bias_deg: float = 0.5,
+        dropout_rate: float = 0.0,
+        dropout_duration: tuple[float, float] = (0.1, 0.5),
     ) -> torch.Tensor:
         pos, quat = frame_pose_b(env, frame_name, sensor_cfg)
         # velocities of the drone in the base frame
@@ -150,7 +157,18 @@ class mocap_drone_pose_b(ManagerTermBase):
         pos = pos + self._pos_bias + pos_std * torch.randn_like(pos)
         quat = math_utils.quat_mul(self._rot_bias, quat)
         quat = math_utils.quat_mul(_quat_from_rotvec(math.radians(rot_std_deg) * torch.randn_like(pos)), quat)
-        return torch.cat([pos, math_utils.quat_unique(quat)], dim=-1)
+        reading = torch.cat([pos, math_utils.quat_unique(quat)], dim=-1)
+        if dropout_rate > 0.0:
+            # the first call after a reset has no previous reading to repeat
+            fresh = env.episode_length_buf <= 1
+            start = (torch.rand_like(self._dropout_left) < dropout_rate * env.step_dt) & ~fresh
+            start &= self._dropout_left <= 0.0
+            duration = math_utils.sample_uniform(*dropout_duration, self._dropout_left.shape, self.device)
+            self._dropout_left = torch.where(start, duration, self._dropout_left)
+            reading = torch.where((self._dropout_left > 0.0).unsqueeze(-1), self._last, reading)
+            self._dropout_left = (self._dropout_left - env.step_dt).clamp(min=0.0)
+        self._last = reading.clone()
+        return reading
 
 
 def contact_forces(env: ManagerBasedEnv, sensor_names: list[str]) -> torch.Tensor:

@@ -222,10 +222,10 @@ def hold(env: ManagerBasedRLEnv, min_force: float = 1.0, max_settle: float = 0.0
     return ((judge.phase == KILLED) & (right > min_force) & (left > min_force) & settled).float()
 
 
-def drone_push(env: ManagerBasedRLEnv, deadband: float = 0.005) -> torch.Tensor:
+def drone_push(env: ManagerBasedRLEnv, deadband: float = 0.04) -> torch.Tensor:
     """Distance of the drone from where it is supposed to be (hover target or reset position) beyond ``deadband``,
-    before the grasp [m], shape (N,). The flight controller's own tracking error counts too; it stays within a few
-    mm without contact."""
+    before the grasp [m], shape (N,). The deadband is above the drone's own hover jitter (about 19 mm RMS, at most
+    about 45 mm with the disturbance force), so only pushes count."""
     moved = (frame_pos_b(env, "drone") - drone_target_pos_b(env)).norm(dim=-1)
     return (moved - deadband).clamp(min=0.0) * (get_judge(env).phase == APPROACH)
 
