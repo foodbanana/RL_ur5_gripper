@@ -35,8 +35,8 @@ from ... import grasp_env_cfg as grasp
 from ... import mdp
 
 FRAME_MARKER_SMALL_CFG = clone(FRAME_MARKER_CFG)
-FRAME_MARKER_SMALL_CFG.markers["frame"].scale = (0.05, 0.05, 0.05)
-"""Frame axes for ``ee_frame`` in play: one tenth of the default (0.5), about the size of the gripper fingers."""
+FRAME_MARKER_SMALL_CFG.markers["frame"].scale = (0.1, 0.1, 0.1)
+"""Frame axes for ``ee_frame`` in play: a fifth of the default (0.5), the size the cabinet example uses."""
 
 FINGER_CONTACT_SENSORS = [f"{name.removeprefix('rh_p12_rn_')}_contact" for name in FINGER_BODY_NAMES]
 """One drone-filtered contact sensor per finger link: ``r1_contact``, ``r2_contact``, ``l1_contact``, ``l2_contact``."""
