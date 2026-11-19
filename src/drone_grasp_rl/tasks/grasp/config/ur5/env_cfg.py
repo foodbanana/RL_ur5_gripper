@@ -89,8 +89,18 @@ class UR5ActionsCfg(grasp.ActionsCfg):
     # Goal moves at most 0.05 rad per 30 Hz step (1.5 rad/s, the old IK's joint target speed limit), reached by
     # linear interpolation like the old repo's 33 ms command interpolation.
     # domain randomization: 0-1 extra policy steps (0-33 ms) of command delay per episode
+    # Smoothing, slowing within 25 cm of the grasp point and holding still once grasped: the teacher's demonstrations
+    # should be calm (before these: median 27 cm/s over the last 5 cm and 7 deg/s of arm motion while holding; with
+    # them 14 cm/s and 0.1 deg/s at the same success rate).
     arm_action = mdp.InterpolatedRelativeJointPositionActionCfg(
-        asset_name="robot", joint_names=ARM_JOINT_NAMES, max_step=0.05, delay_steps=(0, 1)
+        asset_name="robot",
+        joint_names=ARM_JOINT_NAMES,
+        max_step=0.05,
+        delay_steps=(0, 1),
+        smoothing=0.5,
+        slow_distance=0.25,
+        min_step_scale=0.1,
+        hold_after_grasp=True,
     )
     # Only the leader joint is commanded; the three mimic joints follow it. The target moves at the real
     # gripper's profile speed (fully closed in 2.2 s); action < 0 closes and stays closed for the episode.
@@ -118,6 +128,8 @@ class UR5GraspEnvCfg(grasp.GraspEnvCfg):
         self.observations.policy.arm_joint_pos.params["asset_cfg"] = arm
         self.observations.policy.arm_joint_vel.params["asset_cfg"] = arm
         self.rewards.joint_vel.params["asset_cfg"] = arm
+        self.rewards.joint_acc.params["asset_cfg"] = arm
+        self.observations.policy.finger_contact.params["sensor_names"] = FINGER_CONTACT_SENSORS
         self.rewards.joint_limits.params["asset_cfg"] = arm
         self.observations.policy.gripper_pos.params["asset_cfg"] = SceneEntityCfg(
             "robot", joint_names=[GRIPPER_JOINT_NAME]

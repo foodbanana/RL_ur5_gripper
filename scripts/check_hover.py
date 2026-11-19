@@ -49,6 +49,7 @@ def main():
     for name in env_cfg.rewards.__dataclass_fields__:
         if name not in ("action_rate", "joint_vel", "joint_limits"):
             setattr(env_cfg.rewards, name, None)
+    env_cfg.curriculum = None  # it ramps reward terms that are turned off here
     env_cfg.actions.drone_hover.judge_term = None
     if args_cli.disturbance is not None:
         env_cfg.actions.drone_hover.disturbance_std = args_cli.disturbance

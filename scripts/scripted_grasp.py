@@ -64,6 +64,10 @@ def main():
     # data collection repo, where hover episodes were teleoperated)
     env_cfg.actions.drone_hover.preset_weights = {"static": 1.0}
     env_cfg.disable_randomization()
+    # the expert computes its goal steps itself; the policy-side smoothing, slowing and hold would only delay it
+    env_cfg.actions.arm_action.smoothing = 1.0
+    env_cfg.actions.arm_action.slow_distance = None
+    env_cfg.actions.arm_action.hold_after_grasp = False
     env_cfg.seed = args_cli.seed
     if args_cli.device is not None:
         env_cfg.sim.device = args_cli.device

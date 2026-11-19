@@ -60,6 +60,18 @@ def frame_pose_w(
     return math_utils.combine_frame_transforms(pose[:, :3], pose[:, 3:7], off_pos, off_rot)
 
 
+def frame_lin_vel_w(
+    env: ManagerBasedEnv, frame_name: str, sensor_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame")
+) -> torch.Tensor:
+    """World-frame linear velocity of a target frame of the frame transformer config [m/s], shape (N, 3)."""
+    frame_pose_w(env, frame_name, sensor_cfg)  # fills the cache
+    asset, body, off_pos, _ = env.__dict__["_drone_grasp_frames"][(sensor_cfg.name, frame_name)]
+    quat = asset.data.body_link_pose_w.torch[:, body, 3:7]
+    lin = asset.data.body_link_lin_vel_w.torch[:, body]
+    ang = asset.data.body_link_ang_vel_w.torch[:, body]
+    return lin + torch.linalg.cross(ang, math_utils.quat_apply(quat, off_pos), dim=-1)
+
+
 def frame_pose_b(
     env: ManagerBasedEnv, frame_name: str, sensor_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame")
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -183,3 +195,41 @@ def contact_forces(env: ManagerBasedEnv, sensor_names: list[str]) -> torch.Tenso
         # (N, bodies, filters, 3) -> total over bodies and filters
         forces.append(sensor.data.force_matrix_w.torch.sum(dim=(1, 2)).norm(dim=-1))
     return torch.stack(forces, dim=-1)
+
+
+# -- privileged observations of the teacher policy (simulation only) --
+
+
+def drone_vel_b(env: ManagerBasedEnv, robot_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """Exact drone linear [m/s] and angular [rad/s] velocity in the robot base frame, shape (N, 6)."""
+    base_quat = env.scene[robot_cfg.name].data.root_quat_w.torch
+    drone = env.scene["drone"]
+    lin = math_utils.quat_apply_inverse(base_quat, drone.data.root_lin_vel_w.torch)
+    ang = math_utils.quat_apply_inverse(base_quat, drone.data.root_ang_vel_w.torch)
+    return torch.cat([lin, ang], dim=-1)
+
+
+def drone_pos_in_tcp(env: ManagerBasedEnv, sensor_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame")) -> torch.Tensor:
+    """Exact drone body position in the TCP frame [m], shape (N, 3)."""
+    tcp_pos, tcp_quat = frame_pose_w(env, "tcp", sensor_cfg)
+    drone_pos, _ = frame_pose_w(env, "drone", sensor_cfg)
+    return math_utils.quat_apply_inverse(tcp_quat, drone_pos - tcp_pos)
+
+
+def gripper_closing(env: ManagerBasedEnv, gripper_action: str = "gripper_action") -> torch.Tensor:
+    """1 once the (latched) close command is in force, shape (N, 1)."""
+    return env.action_manager.get_term(gripper_action).closing.float().unsqueeze(-1)
+
+
+def grasp_detected(env: ManagerBasedEnv, judge_term: str = "grasp_success") -> torch.Tensor:
+    """1 while the judge has the drone grasped (also after the motor stop, which is not revealed), shape (N, 1).
+
+    Something a camera student can also see (closed fingers around the drone); the motor stop is left out on
+    purpose, since the student could not know it.
+    """
+    # the observation manager evaluates its terms once before the termination manager exists
+    manager = getattr(env, "termination_manager", None)
+    if manager is None or judge_term not in manager.active_terms:
+        return torch.zeros(env.num_envs, 1, device=env.device)
+    phase = manager.get_term_cfg(judge_term).func.phase
+    return ((phase == 1) | (phase == 2) | (phase == 3)).float().unsqueeze(-1)

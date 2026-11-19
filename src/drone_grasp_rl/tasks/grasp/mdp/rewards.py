@@ -22,7 +22,7 @@ from isaaclab.managers import ManagerTermBase, SceneEntityCfg
 from .actions import _to_index
 from .drone_control import drone_target_pos_b
 from .judge import APPROACH, GRASPED, KILLED, get_judge
-from .observations import frame_pos_b, frame_pose_b, frame_pose_w
+from .observations import frame_lin_vel_w, frame_pos_b, frame_pose_b, frame_pose_w
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -114,6 +114,30 @@ def approach_fine(
     return (1.0 - torch.tanh(rel.norm(dim=-1) / std)) * (on_line & phase_ok)
 
 
+def approach_speed_excess(
+    env: ManagerBasedRLEnv,
+    base_speed: float = 0.05,
+    speed_per_distance: float = 1.0,
+    active_distance: float = 0.10,
+    grasp_offset: tuple[float, float, float] = GRASP_OFFSET,
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+) -> torch.Tensor:
+    """TCP speed relative to the drone above ``base_speed + speed_per_distance * d`` [m/s], before the grasp, (N,).
+
+    ``d`` is the TCP distance to the grasp point, so the allowed speed shrinks as the gripper closes in (5 cm/s at
+    the grasp point, 15 cm/s at 10 cm), like a teleoperator slowing down. The trained policy reached the waist fast
+    enough to look dangerous (median 27 cm/s in the last 5 cm) and overshot by about 12 mm. Only within
+    ``active_distance``: charged along the whole approach, it taught the policy within 10 iterations to stop moving.
+    """
+    rel = tcp_in_grasp_frame(env, grasp_offset)
+    drone_vel = env.scene["drone"].data.root_lin_vel_w.torch
+    speed = (frame_lin_vel_w(env, "tcp", sensor_cfg) - drone_vel).norm(dim=-1)
+    distance = rel.norm(dim=-1)
+    limit = base_speed + speed_per_distance * distance
+    active = (get_judge(env).phase == APPROACH) & (distance < active_distance)
+    return (speed - limit).clamp(min=0.0) * active
+
+
 def misalignment(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame")) -> torch.Tensor:
     """Gripper misalignment with the drone, 0 when aligned, up to 3, shape (N,).
 
@@ -153,6 +177,7 @@ def drone_tilt(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg = SceneEntityC
 def arm_motion_while_closing(
     env: ManagerBasedRLEnv,
     gate: str = "close",
+    norm: str = "l2",
     arm_action: str = "arm_action",
     gripper_action: str = "gripper_action",
 ) -> torch.Tensor:
@@ -165,12 +190,14 @@ def arm_motion_while_closing(
     the policy free to correct the tilt the closing fingers cause.
     """
     actions = env.action_manager.get_term(arm_action).raw_actions.clamp(-1.0, 1.0)
+    # "l1" also charges the small actions that made the arm shiver after the grasp (squares of ~0.1 are ~0)
+    size = actions.abs().sum(dim=-1) if norm == "l1" else actions.square().sum(dim=-1)
     if gate == "grasp":
         phase = get_judge(env).phase
         active = (phase == GRASPED) | (phase == KILLED)
     else:
         active = env.action_manager.get_term(gripper_action).closing
-    return actions.square().sum(dim=-1) * active
+    return size * active
 
 
 def finger_contact(env: ManagerBasedRLEnv, min_force: float = 1.0) -> torch.Tensor:

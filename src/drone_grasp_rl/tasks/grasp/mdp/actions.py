@@ -49,6 +49,19 @@ class InterpolatedRelativeJointPositionAction(ActionTerm):
     ``delay_steps``: each episode the actions are applied a random whole number of policy steps late (command
     latency of the real arm on top of the interpolation; the data collection repo measured 47 ms from command to
     joint motion).
+
+    ``smoothing``: exponential moving average of the applied action, ``a = s * a_new + (1 - s) * a_prev`` (1 = off).
+    The trained policy dithered by about 0.1 per step around a held pose; filtering also takes out part of the
+    exploration noise (OpenAI's in-hand manipulation smoothed its actions the same way).
+
+    ``slow_distance``: within this TCP distance to the grasp point [m] the goal step shrinks in proportion to the
+    distance, down to ``min_step_scale`` of ``max_step`` at the grasp point, so the arm cannot rush the drone (the
+    policy came in at a median 27 cm/s over the last 5 cm) and moves slowly while it holds it.
+
+    ``hold_after_grasp``: once the grasp judge (termination term ``judge_term``) has the grasp, the goal stops moving,
+    as the scripted expert stops the arm when it closes. Measured on a trained policy: with the arm held still after
+    the grasp the success rate stayed (98 % -> 95 %), the end-of-hold gripper tilt halved (6.6 -> 3.2 deg) and the
+    joints moved at 0.4 deg/s instead of 7 deg/s. A teacher-side rule: a camera student sees the closed fingers too.
     """
 
     cfg: InterpolatedRelativeJointPositionActionCfg
@@ -71,6 +84,7 @@ class InterpolatedRelativeJointPositionAction(ActionTerm):
         max_delay = cfg.delay_steps[1]
         self._history = torch.zeros(self.num_envs, max_delay + 1, len(self._joint_ids), device=self.device)
         self._delay = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self._smoothed = torch.zeros(self.num_envs, len(self._joint_ids), device=self.device)
 
     @property
     def action_dim(self) -> int:
@@ -99,7 +113,22 @@ class InterpolatedRelativeJointPositionAction(ActionTerm):
         self._history = torch.roll(self._history, 1, dims=1)
         self._history[:, 0] = actions.clamp(-1.0, 1.0)
         applied = self._history[torch.arange(self.num_envs, device=self.device), self._delay]
+        if self.cfg.smoothing < 1.0:
+            self._smoothed = self.cfg.smoothing * applied + (1.0 - self.cfg.smoothing) * self._smoothed
+            applied = self._smoothed
         step = applied * self.cfg.max_step
+        if self.cfg.hold_after_grasp:
+            manager = getattr(self._env, "termination_manager", None)
+            if manager is not None and self.cfg.judge_term in manager.active_terms:
+                phase = manager.get_term_cfg(self.cfg.judge_term).func.phase
+                holding = (phase == 1) | (phase == 2) | (phase == 3)
+                step = step * (~holding).unsqueeze(-1)
+        if self.cfg.slow_distance is not None:
+            from .rewards import tcp_in_grasp_frame  # noqa: PLC0415 (rewards imports this module)
+
+            distance = tcp_in_grasp_frame(self._env).norm(dim=-1, keepdim=True)
+            scale = (distance / self.cfg.slow_distance).clamp(self.cfg.min_step_scale, 1.0)
+            step = step * scale
         self._goal = torch.max(torch.min(self._goal + step, self._upper), self._lower)
         self._substep.zero_()
 
@@ -119,6 +148,7 @@ class InterpolatedRelativeJointPositionAction(ActionTerm):
         self._target[ids] = default
         self._substep[ids] = self._decimation
         self._history[ids] = 0.0
+        self._smoothed[ids] = 0.0
         num = self._delay[ids].shape[0]
         low, high = self.cfg.delay_steps
         self._delay[ids] = torch.randint(low, high + 1, (num,), device=self.device)
@@ -141,6 +171,21 @@ class InterpolatedRelativeJointPositionActionCfg(ActionTermCfg):
 
     delay_steps: tuple[int, int] = (0, 0)
     """Range of the action delay in policy steps, sampled per episode (inclusive)."""
+
+    smoothing: float = 1.0
+    """Weight of the new action in its exponential moving average (1 = no smoothing)."""
+
+    slow_distance: float | None = None
+    """TCP distance to the grasp point below which the goal step shrinks [m]; None turns it off."""
+
+    min_step_scale: float = 1.0
+    """Smallest fraction of ``max_step`` near the grasp point."""
+
+    hold_after_grasp: bool = False
+    """Freeze the goal once the grasp judge has the grasp."""
+
+    judge_term: str = "grasp_success"
+    """Termination term holding the grasp judge (for ``hold_after_grasp``)."""
 
 
 class ProfiledBinaryJointPositionAction(BinaryJointPositionAction):

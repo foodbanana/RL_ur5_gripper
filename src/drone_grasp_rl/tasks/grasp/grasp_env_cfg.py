@@ -17,6 +17,7 @@ import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.managers import ActionTermCfg, SceneEntityCfg
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -140,8 +141,10 @@ class ActionsCfg:
 
 @configclass
 class ObservationsCfg:
-    """``policy`` holds only what the real robot can measure (arm, gripper, mocap drone pose); ``critic`` adds
-    simulator-only state (exact drone pose and velocity, finger contact forces)."""
+    """``policy`` is the teacher's input: what the real robot can measure (arm, gripper, mocap drone pose; the
+    first 30 entries) followed by privileged simulator state (exact drone pose and velocity, drone in the TCP
+    frame, finger contacts, gripper closed, grasp detected; 22 more). ``critic`` adds the exact drone pose and
+    velocity and the contact forces once more (it was built for the 30-entry policy)."""
 
     @configclass
     class PolicyCfg(ObsGroup):
@@ -159,6 +162,19 @@ class ObservationsCfg:
         # The real robot gets the drone pose from motion capture: latency, calibration bias and noise.
         drone_pose = ObsTerm(func=mdp.mocap_drone_pose_b, params={"dropout_rate": 0.2})
         actions = ObsTerm(func=mdp.last_action)
+        # -- privileged teacher observations (simulation only), after the 30 deployable ones above so a policy
+        #    trained on those can be extended (scripts/expand_policy_inputs.py). Scaled to about unit size, since
+        #    the extended observation normalizer keeps the new entries at mean 0 / std 1. Things a camera could
+        #    also tell (no motor stop flag), so the teacher can later be distilled into an image policy.
+        drone_pos_true = ObsTerm(func=mdp.frame_pos_b, params={"frame_name": "drone"})
+        drone_quat_true = ObsTerm(func=mdp.frame_quat_b, params={"frame_name": "drone"})
+        drone_vel = ObsTerm(func=mdp.drone_vel_b, scale=5.0)
+        drone_in_tcp = ObsTerm(func=mdp.drone_pos_in_tcp, scale=10.0)
+        finger_contact = ObsTerm(
+            func=mdp.contact_forces, params={"sensor_names": MISSING}, clip=(0.0, 50.0), scale=0.05
+        )
+        gripper_closing = ObsTerm(func=mdp.gripper_closing)
+        grasped = ObsTerm(func=mdp.grasp_detected)
 
         def __post_init__(self):
             self.enable_corruption = True
@@ -228,8 +244,13 @@ class RewardsCfg:
     # held drone tilted from up (zero while it hovers upright)
     drone_tilt = RewTerm(func=mdp.drone_tilt, weight=-10.0)
     # arm action once the judge has the grasp (gated on the close command instead, the policy could not correct the
-    # tilt the closing fingers cause and success dropped from 82 % to 45 %)
-    arm_still = RewTerm(func=mdp.arm_motion_while_closing, weight=-1.5, params={"gate": "grasp"})
+    # tilt the closing fingers cause and success dropped from 82 % to 45 %). L1: with squares, the ~0.1 actions
+    # that made the arm shiver after the grasp cost almost nothing.
+    arm_still = RewTerm(func=mdp.arm_motion_while_closing, weight=0.0, params={"gate": "grasp", "norm": "l1"})
+    # within 10 cm of the grasp point: speed above 5 cm/s + 1/s x distance (slow down when close)
+    approach_speed = RewTerm(func=mdp.approach_speed_excess, weight=0.0)
+    # arm joint accelerations (abrupt starts and stops)
+    joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=0.0, params={"asset_cfg": MISSING})
     # both finger sides on the drone, until the motor stop [about 2 per second, at most about 1.5 s]
     finger_contact = RewTerm(func=mdp.finger_contact, weight=2.0)
     # commanding close at the waist, before the grasp [about 2 per second for the ~0.5 s until contact]
@@ -268,6 +289,30 @@ class TerminationsCfg:
 
 
 @configclass
+class CurriculumCfg:
+    """Smoothness penalties ramped in over 24k env steps (1000 iterations of 24 steps) from the start of a run:
+    added all at once to a trained policy they are a large, sudden change the critic has not seen. The final
+    weights are the targets; the reward config holds the starting weights."""
+
+    approach_speed = CurrTerm(
+        func=mdp.ramp_reward_weight,
+        params={"term_name": "approach_speed", "initial_weight": 0.0, "final_weight": -5.0, "num_steps": 24000},
+    )
+    joint_acc = CurrTerm(
+        func=mdp.ramp_reward_weight,
+        params={"term_name": "joint_acc", "initial_weight": 0.0, "final_weight": -1.0e-4, "num_steps": 24000},
+    )
+    action_rate = CurrTerm(
+        func=mdp.ramp_reward_weight,
+        params={"term_name": "action_rate", "initial_weight": -0.001, "final_weight": -0.01, "num_steps": 24000},
+    )
+    arm_still = CurrTerm(
+        func=mdp.ramp_reward_weight,
+        params={"term_name": "arm_still", "initial_weight": 0.0, "final_weight": -1.5, "num_steps": 24000},
+    )
+
+
+@configclass
 class GraspEnvCfg(ManagerBasedRLEnvCfg):
     """Drone grasp environment. Physics 120 Hz, policy 30 Hz (decimation 4), as in the data collection repo."""
 
@@ -277,6 +322,7 @@ class GraspEnvCfg(ManagerBasedRLEnvCfg):
     events: EventCfg = EventCfg()
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
+    curriculum: CurriculumCfg = CurriculumCfg()
 
     def __post_init__(self):
         self.decimation = 4

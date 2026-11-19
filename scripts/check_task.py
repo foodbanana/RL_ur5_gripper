@@ -60,6 +60,10 @@ def main():
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.events.reset_drone.params["near_fraction"] = 0.0  # the 25 reference positions only, no curriculum
     env_cfg.actions.gripper_action.latch_close = False  # the close check opens the gripper again
+    # the arm check measures the raw goal step
+    env_cfg.actions.arm_action.smoothing = 1.0
+    env_cfg.actions.arm_action.slow_distance = None
+    env_cfg.actions.arm_action.hold_after_grasp = False
     # The drone only floats (no position control, no drag): the checks push it and measure the mocap lag on a drone
     # drifting at constant velocity. scripts/check_hover.py checks the flight controller.
     env_cfg.actions.drone_hover.preset_weights = {"static": 1.0}
@@ -70,10 +74,12 @@ def main():
     # the drone motors, is checked by scripts/scripted_grasp.py.
     for name in ("grasp_success", "grasp_failed", "drone_knocked", "protective_stop"):
         setattr(env_cfg.terminations, name, None)
+    env_cfg.curriculum = None  # it ramps reward terms that are turned off here
     # the grasp rewards read the judge, which is off
     for name in (
         "approach",
         "approach_fine",
+        "approach_speed",
         "arm_still",
         "drone_tilt",
         "finger_contact",

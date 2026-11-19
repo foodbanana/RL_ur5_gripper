@@ -53,7 +53,13 @@ sys.argv = [sys.argv[0]] + hydra_args
 def main():
     import isaaclab.utils.math as math_utils
 
-    from drone_grasp_rl.tasks.grasp.mdp import approach_path_distance, frame_pose_b, tcp_in_grasp_frame
+    from drone_grasp_rl.tasks.grasp.mdp import (
+        approach_path_distance,
+        frame_lin_vel_w,
+        frame_pose_b,
+        frame_pose_w,
+        tcp_in_grasp_frame,
+    )
     from drone_grasp_rl.tasks.grasp.mdp.judge import APPROACH, FAIL_REASONS, HELD, get_judge
 
     torch.manual_seed(args_cli.seed)
@@ -73,7 +79,10 @@ def main():
         env = RslRlVecEnvWrapper(gym.make(TASK, cfg=env_cfg), clip_actions=agent_cfg.clip_actions)
         cleanup.callback(env.close)
         runner = create_rsl_rl_runner(env, agent_cfg)
-        runner.load(args_cli.checkpoint)
+        # actor and critic only: checkpoints made by expand_policy_inputs.py carry no optimizer state
+        runner.load(
+            args_cli.checkpoint, load_cfg={"actor": True, "critic": True, "optimizer": False, "iteration": True}
+        )
         policy = runner.get_inference_policy(device=env.unwrapped.device)
         base = env.unwrapped
         n, dev = base.num_envs, base.device
@@ -85,13 +94,21 @@ def main():
         best_rel = torch.zeros(n, 3, device=dev)
         closed_at = torch.full((n,), float("nan"), device=dev)
         tilt_max = torch.full((n,), float("nan"), device=dev)
+        near_speed = torch.full((n,), float("nan"), device=dev)
+        robot = base.scene["robot"]
+        arm_ids = base.action_manager.get_term("arm_action").joint_ids
+        prev_arm = torch.zeros(n, 6, device=dev)
+        prev_q, prev_tcp = None, None
+        holding_stats = []  # per live grasped env-step: max joint speed [rad/s], TCP speed [m/s], arm action change
         outcomes = [None] * n
         hold = torch.full((n, 4), float("nan"), device=dev)
 
         obs = env.get_observations()
         with torch.inference_mode():
             while not bool(done_once.all()):
-                obs, _, dones, _ = env.step(policy(obs))
+                actions = policy(obs)
+                obs, _, dones, _ = env.step(actions)
+                arm = actions[:, :6].clamp(-1.0, 1.0)
                 policy.reset(dones)
                 live = ~done_once & ~dones.bool()
                 rel = tcp_in_grasp_frame(base)
@@ -103,6 +120,22 @@ def main():
                 tilt = torch.acos(math_utils.matrix_from_quat(tcp_quat_b)[..., 2, 2].clamp(-1.0, 1.0))
                 after = live & (judge.phase != APPROACH)
                 tilt_max = torch.where(after, torch.fmax(tilt_max, tilt), tilt_max)
+                tcp_vel = frame_lin_vel_w(base, "tcp")
+                rel_speed = (tcp_vel - base.scene["drone"].data.root_lin_vel_w.torch).norm(dim=-1)
+                near = live & (judge.phase == APPROACH) & (rel.norm(dim=-1) < 0.05)
+                near_speed = torch.where(near, torch.fmax(near_speed, rel_speed), near_speed)
+                # speeds from position changes: in contact PhysX reports joint velocities of joints that do not move
+                # (0.6 rad/s on the stalled gripper), so the reported velocities overstate the shivering
+                q_now = robot.data.joint_pos.torch[:, arm_ids]
+                tcp_now = frame_pose_w(base, "tcp")[0]
+                holding = live & ((judge.phase == 1) | (judge.phase == 2)) & (prev_q is not None)
+                if holding.any():
+                    jspeed = (q_now - prev_q).abs().max(dim=-1).values / base.step_dt
+                    tspeed = (tcp_now - prev_tcp).norm(dim=-1) / base.step_dt
+                    change = (arm - prev_arm).norm(dim=-1)
+                    holding_stats.append(torch.stack([jspeed, tspeed, change], dim=-1)[holding])
+                prev_q, prev_tcp = q_now.clone(), tcp_now.clone()
+                prev_arm = arm.clone()
                 first_close = live & torch.isnan(closed_at) & gripper.closing
                 closed_at = torch.where(first_close, rel.norm(dim=-1), closed_at)
                 for i in (dones.bool() & ~done_once).nonzero(as_tuple=False).squeeze(-1).tolist():
@@ -155,6 +188,20 @@ def main():
             )
         else:
             print("[eval] gripper never closed")
+        if (~torch.isnan(near_speed)).any():
+            v = 1000 * near_speed[~torch.isnan(near_speed)]
+            print(
+                f"[eval] fastest TCP speed relative to the drone in the last 5 cm before the grasp [mm/s]: "
+                f"median {v.median():.0f}, 90th pct {v.quantile(0.9):.0f}, max {v.max():.0f}"
+            )
+        if holding_stats:
+            a = torch.cat(holding_stats)
+            print(
+                f"[eval] after the grasp: max joint speed mean {torch.rad2deg(a[:, 0]).mean():.2f} deg/s "
+                f"(95th pct {torch.rad2deg(a[:, 0]).quantile(0.95):.2f}), "
+                f"TCP speed mean {1000 * a[:, 1].mean():.1f} mm/s "
+                f"(95th pct {1000 * a[:, 1].quantile(0.95):.1f}), arm action change mean {a[:, 2].mean():.3f}"
+            )
         grasped = ~torch.isnan(tilt_max)
         if grasped.any():
             deg = torch.rad2deg(tilt_max[grasped])

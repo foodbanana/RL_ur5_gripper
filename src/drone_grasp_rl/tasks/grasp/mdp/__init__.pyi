@@ -20,6 +20,7 @@ __all__ = [
     "grasp_failed",
     "grasp_judge",
     "protective_stop",
+    "ramp_reward_weight",
     "ProfiledBinaryJointPositionAction",
     "ProfiledBinaryJointPositionActionCfg",
     "contact_forces",
@@ -32,12 +33,18 @@ __all__ = [
     "reset_drone_at_targets",
     "GRASP_OFFSET",
     "approach_fine",
+    "approach_speed_excess",
     "approach_path_distance",
     "approach_progress",
     "arm_motion_while_closing",
     "close_near",
+    "drone_pos_in_tcp",
     "drone_push",
     "drone_tilt",
+    "drone_vel_b",
+    "frame_lin_vel_w",
+    "grasp_detected",
+    "gripper_closing",
     "empty_close",
     "finger_contact",
     "gripper_tilt",
@@ -55,15 +62,29 @@ from .actions import (
     ProfiledBinaryJointPositionAction,
     ProfiledBinaryJointPositionActionCfg,
 )
+from .curriculums import ramp_reward_weight
 from .drone_control import HOVER_PRESETS, DroneHoverController, DroneHoverControllerCfg, drone_target_pos_b
 from .events import hold_drone_in_place, reset_drone_at_targets
 from .judge import APPROACH, FAILED, GRASPED, HELD, KILLED, get_judge, grasp_failed, grasp_judge
-from .observations import contact_forces, frame_pos_b, frame_pose_b, frame_pose_w, frame_quat_b, mocap_drone_pose_b
+from .observations import (
+    contact_forces,
+    drone_pos_in_tcp,
+    drone_vel_b,
+    frame_lin_vel_w,
+    frame_pos_b,
+    frame_pose_b,
+    frame_pose_w,
+    frame_quat_b,
+    grasp_detected,
+    gripper_closing,
+    mocap_drone_pose_b,
+)
 from .rewards import (
     GRASP_OFFSET,
     approach_fine,
     approach_path_distance,
     approach_progress,
+    approach_speed_excess,
     arm_motion_while_closing,
     close_near,
     drone_push,
