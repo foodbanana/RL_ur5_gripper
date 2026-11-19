@@ -296,7 +296,7 @@ class CurriculumCfg:
 
     approach_speed = CurrTerm(
         func=mdp.ramp_reward_weight,
-        params={"term_name": "approach_speed", "initial_weight": 0.0, "final_weight": -5.0, "num_steps": 24000},
+        params={"term_name": "approach_speed", "initial_weight": 0.0, "final_weight": -10.0, "num_steps": 24000},
     )
     joint_acc = CurrTerm(
         func=mdp.ramp_reward_weight,

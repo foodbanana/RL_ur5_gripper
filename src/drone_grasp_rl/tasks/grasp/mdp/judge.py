@@ -159,7 +159,7 @@ class grasp_judge(ManagerTermBase):
         max_settle: float = 0.015,
         max_final_change: float = 0.0005,
         max_rotation_deg: float = 10.0,
-        max_gripper_tilt_deg: float = 15.0,
+        max_gripper_tilt_deg: float = 10.0,
         drop_distance: float = 0.03,
     ) -> torch.Tensor:
         robot: Articulation = env.scene[robot_cfg.name]

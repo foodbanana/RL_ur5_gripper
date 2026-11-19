@@ -3,9 +3,10 @@
 Reinforcement-learning tasks for drone grasping, built as an installable
 [Isaac Lab](https://github.com/isaac-sim/IsaacLab) 3.0 task package (Isaac Sim 6.2, uv `src` layout).
 
-> **Status:** the UR5 drone grasp task trains on PhysX. The drone flies with a geometric controller on the mid hover
-> preset; with domain randomization the policy grasps and holds it upright (gripper tilt <= 15 deg) in 87-91 % of
-> episodes from the 25 reference starts (82 % big, 96 % static).
+> **Status:** the UR5 drone grasp task trains on PhysX. The current policy is a privileged teacher for VLA data:
+> on the flying drone (mid hover) with domain randomization it grasps and holds it upright (gripper tilt <= 10 deg)
+> in 93-95 % of episodes from the 25 reference starts, slows to about 14 cm/s before the grasp and holds the arm
+> still afterwards.
 
 Registered tasks:
 - `DroneGraspRl-Grasp-UR5`: UR5 + ROBOTIS RH-P12-RN(A) grasps a hovering Iris drone from below
