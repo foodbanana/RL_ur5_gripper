@@ -148,7 +148,7 @@ def main():
                             m = judge.hold_metrics[i]
                             label += (
                                 f" (settle {1000 * m[0]:.1f} mm, last 0.5 s {1000 * m[1]:.2f} mm,"
-                                f" rot {torch.rad2deg(m[2]):.1f} deg)"
+                                f" rot {torch.rad2deg(m[2]):.1f} deg, gripper tilt {torch.rad2deg(m[3]):.1f} deg)"
                             )
                         outcomes[i] = (
                             int(targets[i]),

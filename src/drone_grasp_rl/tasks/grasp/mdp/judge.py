@@ -18,7 +18,9 @@ Phases per environment::
   the drone's weight goes onto the gripper. The policy does not observe this, as the real drone controller
   does not know it was grasped.
 - HELD: ``hold_time`` after the kill the drone has settled at most ``max_settle`` relative to the TCP, moved at
-  most ``max_final_change`` in the last 0.5 s, and turned at most ``max_rotation_deg`` relative to the TCP.
+  most ``max_final_change`` in the last 0.5 s, and turned at most ``max_rotation_deg`` relative to the TCP; and the
+  gripper's approach axis is within ``max_gripper_tilt_deg`` of up (base +z). The last condition is not in the data
+  collection judge: its teleoperators held the gripper upright, while a trained policy tilted it with the drone.
 - FAILED: opening the gripper after the grasp (``opened_early``), the drone more than ``drop_distance`` away from
   where it was grasped (``dropped``), or the hold criteria not met at the end (``slip``).
 
@@ -37,7 +39,7 @@ import isaaclab.utils.math as math_utils
 from isaaclab.managers import ManagerTermBase, SceneEntityCfg
 
 from .actions import _to_index
-from .observations import frame_pose_w
+from .observations import frame_pose_b, frame_pose_w
 
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation
@@ -48,6 +50,7 @@ APPROACH, GRASPED, KILLED, HELD, FAILED = 0, 1, 2, 3, 4
 """Judge phases."""
 
 FAIL_REASONS = {1: "dropped", 2: "slip", 3: "opened_early"}
+"""``slip`` also covers a held drone with the gripper tilted beyond the limit; see :attr:`grasp_judge.hold_metrics`."""
 """Failure reason codes stored in :attr:`grasp_judge.fail_reason`."""
 
 
@@ -87,8 +90,9 @@ class grasp_judge(ManagerTermBase):
         """Final phase of each environment's previous episode (kept across the reset, for logging and datasets)."""
         self.last_fail_reason = torch.zeros(n, dtype=torch.long, device=dev)
         self.last_empty_close = torch.zeros(n, dtype=torch.bool, device=dev)
-        self.hold_metrics = torch.zeros(n, 3, device=dev)
-        """At the end of the hold: settle [m], change in the last 0.5 s [m], rotation [rad] (kept across resets)."""
+        self.hold_metrics = torch.zeros(n, 4, device=dev)
+        """At the end of the hold: settle [m], change in the last 0.5 s [m], rotation [rad], gripper tilt [rad]
+        (kept across resets)."""
         self.finished = torch.zeros(n, dtype=torch.bool, device=dev)
         """Entered HELD or FAILED during the last update."""
         steps = max(1, round(cfg.params.get("stall_time", 0.2) / env.step_dt))
@@ -155,6 +159,7 @@ class grasp_judge(ManagerTermBase):
         max_settle: float = 0.015,
         max_final_change: float = 0.0005,
         max_rotation_deg: float = 10.0,
+        max_gripper_tilt_deg: float = 15.0,
         drop_distance: float = 0.03,
     ) -> torch.Tensor:
         robot: Articulation = env.scene[robot_cfg.name]
@@ -227,8 +232,11 @@ class grasp_judge(ManagerTermBase):
         settle = (rel_pos - self.ref_pos).norm(dim=-1)
         change = (rel_pos - self.mid_pos).norm(dim=-1)
         rotation = math_utils.quat_error_magnitude(rel_quat, self.ref_quat)
+        _, tcp_quat_b = frame_pose_b(env, "tcp", frame_cfg)
+        tilt = torch.acos(math_utils.matrix_from_quat(tcp_quat_b)[..., 2, 2].clamp(-1.0, 1.0))
         ok = (settle <= max_settle) & (change <= max_final_change) & (rotation <= math.radians(max_rotation_deg))
-        self.hold_metrics[done] = torch.stack([settle, change, rotation], dim=-1)[done]
+        ok &= tilt <= math.radians(max_gripper_tilt_deg)
+        self.hold_metrics[done] = torch.stack([settle, change, rotation, tilt], dim=-1)[done]
         held = done & ok
         self.phase[held] = HELD
         self.finished |= held

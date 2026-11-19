@@ -21,7 +21,7 @@ from isaaclab.managers import ManagerTermBase, SceneEntityCfg
 
 from .actions import _to_index
 from .judge import APPROACH, GRASPED, KILLED, get_judge
-from .observations import frame_pos_b, frame_pose_w
+from .observations import frame_pos_b, frame_pose_b, frame_pose_w
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -126,6 +126,50 @@ def misalignment(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg = SceneEntit
     z_dot = (tcp_rot[..., 2] * drone_rot[..., 2]).sum(dim=-1)
     y_dot = (tcp_rot[..., 1] * drone_rot[..., 1]).sum(dim=-1)
     return (1.0 - z_dot) + (1.0 - y_dot.abs())
+
+
+def gripper_tilt(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame")) -> torch.Tensor:
+    """``1 - cos`` of the angle between the TCP z axis (approach axis) and the robot base +z axis (up), shape (N,).
+
+    The misalignment term compares the gripper with the drone, so after the grasp, when both turn together, it is
+    zero; the trained policy then tilted the grasped drone by a median 39 deg. The hovering drone is upright, so
+    this also holds before the grasp.
+    """
+    _, tcp_quat_b = frame_pose_b(env, "tcp", sensor_cfg)
+    return 1.0 - math_utils.matrix_from_quat(tcp_quat_b)[..., 2, 2]
+
+
+def drone_tilt(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame")) -> torch.Tensor:
+    """``1 - cos`` of the angle between the drone z axis and the robot base +z axis (up), shape (N,).
+
+    Zero while the drone hovers upright; after the grasp it keeps the held drone upright, which the gripper tilt
+    alone does not fully cover (the drone can turn in the fingers).
+    """
+    _, drone_quat_b = frame_pose_b(env, "drone", sensor_cfg)
+    return 1.0 - math_utils.matrix_from_quat(drone_quat_b)[..., 2, 2]
+
+
+def arm_motion_while_closing(
+    env: ManagerBasedRLEnv,
+    gate: str = "close",
+    arm_action: str = "arm_action",
+    gripper_action: str = "gripper_action",
+) -> torch.Tensor:
+    """Squared arm action (goal step) from the close command until the episode ends, shape (N,).
+
+    Keeps the arm still while the fingers close and hold, as the scripted expert does and like the "keep the hand
+    still after contact" term of in-flight catching (Hu et al., 2023). Gated on the close command rather than on the
+    judge's grasp: the policy kept rising while the fingers closed and tilted the gripper and the drone by ~30 deg
+    before the grasp was even detected. ``gate="grasp"`` applies it only once the judge has the grasp, which leaves
+    the policy free to correct the tilt the closing fingers cause.
+    """
+    actions = env.action_manager.get_term(arm_action).raw_actions.clamp(-1.0, 1.0)
+    if gate == "grasp":
+        phase = get_judge(env).phase
+        active = (phase == GRASPED) | (phase == KILLED)
+    else:
+        active = env.action_manager.get_term(gripper_action).closing
+    return actions.square().sum(dim=-1) * active
 
 
 def finger_contact(env: ManagerBasedRLEnv, min_force: float = 1.0) -> torch.Tensor:

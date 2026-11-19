@@ -15,6 +15,7 @@ Usage (from the repository root):
 
 import argparse
 import contextlib
+import math
 import sys
 from collections import Counter
 
@@ -48,8 +49,10 @@ sys.argv = [sys.argv[0]] + hydra_args
 
 
 def main():
-    from drone_grasp_rl.tasks.grasp.mdp import approach_path_distance, tcp_in_grasp_frame
-    from drone_grasp_rl.tasks.grasp.mdp.judge import FAIL_REASONS, HELD, get_judge
+    import isaaclab.utils.math as math_utils
+
+    from drone_grasp_rl.tasks.grasp.mdp import approach_path_distance, frame_pose_b, tcp_in_grasp_frame
+    from drone_grasp_rl.tasks.grasp.mdp.judge import APPROACH, FAIL_REASONS, HELD, get_judge
 
     torch.manual_seed(args_cli.seed)
     env_cfg, agent_cfg = resolve_task_config(TASK, "rsl_rl_cfg_entry_point")
@@ -76,7 +79,9 @@ def main():
         best_path = torch.full((n,), float("inf"), device=dev)
         best_rel = torch.zeros(n, 3, device=dev)
         closed_at = torch.full((n,), float("nan"), device=dev)
+        tilt_max = torch.full((n,), float("nan"), device=dev)
         outcomes = [None] * n
+        hold = torch.full((n, 4), float("nan"), device=dev)
 
         obs = env.get_observations()
         with torch.inference_mode():
@@ -89,6 +94,10 @@ def main():
                 better = live & (path < best_path)
                 best_path = torch.where(better, path, best_path)
                 best_rel = torch.where(better.unsqueeze(-1), rel, best_rel)
+                _, tcp_quat_b = frame_pose_b(base, "tcp")
+                tilt = torch.acos(math_utils.matrix_from_quat(tcp_quat_b)[..., 2, 2].clamp(-1.0, 1.0))
+                after = live & (judge.phase != APPROACH)
+                tilt_max = torch.where(after, torch.fmax(tilt_max, tilt), tilt_max)
                 first_close = live & torch.isnan(closed_at) & gripper.closing
                 closed_at = torch.where(first_close, rel.norm(dim=-1), closed_at)
                 for i in (dones.bool() & ~done_once).nonzero(as_tuple=False).squeeze(-1).tolist():
@@ -99,10 +108,28 @@ def main():
                         if bool(base.termination_manager.get_term(k)[i])
                     ]
                     outcomes[i] = "held" if phase == HELD else FAIL_REASONS.get(reason, "+".join(fired) or "?")
+                    if outcomes[i] in ("held", "slip"):
+                        hold[i] = judge.hold_metrics[i]
                     done_once[i] = True
 
         print(f"[eval] checkpoint: {args_cli.checkpoint}")
         print(f"[eval] outcomes over {n} episodes: {dict(Counter(outcomes))}")
+        judged = ~torch.isnan(hold[:, 3])
+        if judged.any():
+            end_tilt = torch.rad2deg(hold[judged, 3])
+            print(
+                f"[eval] gripper tilt at the end of the hold [deg]: median {end_tilt.median():.1f}, "
+                f"90th pct {end_tilt.quantile(0.9):.1f}, max {end_tilt.max():.1f}"
+            )
+        slips = torch.tensor([o == "slip" for o in outcomes], device=dev)
+        if slips.any():
+            m = hold[slips]
+            print(
+                f"[eval] slip causes ({int(slips.sum())}): settle > 15 mm {int((m[:, 0] > 0.015).sum())}, "
+                f"last 0.5 s > 0.5 mm {int((m[:, 1] > 0.0005).sum())}, rotation > 10 deg "
+                f"{int((m[:, 2] > math.radians(10)).sum())}, "
+                f"gripper tilt > 15 deg {int((m[:, 3] > math.radians(15)).sum())}"
+            )
         mm = 1000 * best_rel
         print(
             f"[eval] closest approach path [mm]: mean {1000 * best_path.mean():.1f}, "
@@ -122,6 +149,14 @@ def main():
             )
         else:
             print("[eval] gripper never closed")
+        grasped = ~torch.isnan(tilt_max)
+        if grasped.any():
+            deg = torch.rad2deg(tilt_max[grasped])
+            print(
+                f"[eval] gripper tilt from up after the grasp (max per episode) [deg]: median {deg.median():.1f}, "
+                f"90th pct {deg.quantile(0.9):.1f}, max {deg.max():.1f}, "
+                f">10 deg in {(deg > 10).float().mean() * 100:.0f}%"
+            )
 
 
 if __name__ == "__main__":

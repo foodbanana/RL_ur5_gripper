@@ -69,6 +69,8 @@ def main():
     for name in (
         "approach",
         "approach_fine",
+        "arm_still",
+        "drone_tilt",
         "finger_contact",
         "close_near",
         "hold",

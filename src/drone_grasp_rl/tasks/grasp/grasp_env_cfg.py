@@ -192,11 +192,19 @@ class RewardsCfg:
     approach_fine = RewTerm(func=mdp.approach_fine, weight=2.0)
     # gripper axes vs drone axes; a penalty since the start pose is already aligned [0 when aligned]
     misalign = RewTerm(func=mdp.misalignment, weight=-1.0)
+    # gripper approach axis vs up, always (after the grasp the drone turns with the gripper, so misalign is blind)
+    gripper_tilt = RewTerm(func=mdp.gripper_tilt, weight=-15.0)
+    # held drone tilted from up (zero while it hovers upright)
+    drone_tilt = RewTerm(func=mdp.drone_tilt, weight=-10.0)
+    # arm action once the judge has the grasp (gated on the close command instead, the policy could not correct the
+    # tilt the closing fingers cause and success dropped from 82 % to 45 %)
+    arm_still = RewTerm(func=mdp.arm_motion_while_closing, weight=-1.5, params={"gate": "grasp"})
     # both finger sides on the drone, until the motor stop [about 2 per second, at most about 1.5 s]
     finger_contact = RewTerm(func=mdp.finger_contact, weight=2.0)
-    # commanding close near the waist, before the grasp [about 2 per second for the ~0.5 s until contact]
+    # commanding close at the waist, before the grasp [about 2 per second for the ~0.5 s until contact]
     # (an empty_close penalty for closing far away taught the policy never to close; the judge still counts it)
-    close_near = RewTerm(func=mdp.close_near, weight=2.0)
+    # only within 6 mm: with 15 mm the policy closed while still rising, squeezed the drone and tilted the gripper
+    close_near = RewTerm(func=mdp.close_near, weight=2.0, params={"max_distance": 0.006})
     # still holding after the motor stop [4 per second, 2.5 s = 10]
     hold = RewTerm(func=mdp.hold, weight=4.0)
     # judge says held [+20 once]; any failure termination [-5 once]
