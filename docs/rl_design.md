@@ -44,8 +44,8 @@ UR5 + ROBOTIS RH-P12-RN(A) 그리퍼가 공중에 떠 있는 Iris 드론의 몸�
 | 테이블 | 2 × 1 m, 상판 z 0.762 m = 로봇 베이스 높이 | `scene_drone.yaml` |
 | 로봇 | env 원점, `under_drone` 자세에서 시작 (TCP가 드론보다 0.305 m 아래), 그리퍼 열림 | 기존 레포 |
 | 드론 | Iris 0.75배, 0.8 kg. 리셋마다 25곳 기준 위치 중 하나 ±3 cm (로봇 베이스 기준), 정지 상태 | `scene_drone.yaml` |
-| 드론 띄우기 | 현재: 몸체별 중력 상쇄 힘 (완전 정지). → hover 제어기로 바꿀 예정 (8장) | |
-| 접촉 재질 | PhysX: 손가락·드론 정지 0.6 / 운동 0.5. Newton: 기본값 1.0 유지 | `drive_gains.yaml` |
+| 드론 비행 | 기하 제어기(geometric controller)가 hover 목표를 따라감. 사인파 프리셋 static/small/mid/big. 모터 정지 뒤 추력 0 | 6-1장 |
+| 접촉 재질 | PhysX: 손가락·드론 정지 0.6 / 운동 0.5 (각각 ×0.7~1.3 랜덤화). Newton: 기본값 1.0 유지 | `drive_gains.yaml` |
 | 드론 충돌체 | PhysX: 원래 `convexDecomposition`. Newton: 미리 분해한 30조각 | `assets/data/drones/iris/README.md` |
 
 **학습 커리큘럼 (초기 상태):** 학습 리셋의 50%는 드론을 **시작 TCP 바로 위 0~30 cm**(수직선 위, 옆 ±3 mm)에 놓는다.
@@ -72,6 +72,9 @@ UR5 + ROBOTIS RH-P12-RN(A) 그리퍼가 공중에 떠 있는 Iris 드론의 몸�
 - 지연 20 ms + 샘플 나이 0~10 ms (100 Hz 모션캡처를 30 Hz로 읽음). 현재 속도로 과거 자세를 계산
 - 에피소드마다 고정 보정 오프셋: 위치 ±2 mm, 회전 최대 0.5° (추정값)
 - 매 샘플 잡음: 위치 1 mm, 회전 0.3° (정규분포)
+- 마커 가림: 초당 0.2번, 0.1~0.5 s 동안 마지막 값 유지 (OpenAI in-hand manipulation 방식)
+
+팔 관절 위치(±0.002 rad), 속도(±0.02 rad/s), 그리퍼(±0.005 rad), TCP(±1 mm)에도 작은 균등 잡음을 넣는다.
 
 ### critic (`critic`, 17차원)
 드론의 정확한 위치(3)·자세(4), 드론 선속도(3)·각속도(3), 손가락 링크 4개의 드론 접촉력(4).
@@ -87,7 +90,7 @@ TCP와 드론 자세는 `ee_frame`(FrameTransformer) **설정**으로 정의하�
 
 | term | 차원 | 동작 |
 |---|---|---|
-| `arm_action` (`InterpolatedRelativeJointPositionAction`) | 6 | 행동 [−1, 1] × **0.05 rad**만큼 관절 목표(goal)를 옮기고, 그 스텝의 물리 4번 동안 선형 보간. 관절 한계 − 0.05 rad로 제한 |
+| `arm_action` (`InterpolatedRelativeJointPositionAction`) | 6 | 행동 [−1, 1] × **0.05 rad**만큼 관절 목표(goal)를 옮기고, 그 스텝의 물리 4번 동안 선형 보간. 관절 한계 − 0.05 rad로 제한. 에피소드마다 0~1 스텝 명령 지연 |
 | `gripper_action` (`ProfiledBinaryJointPositionAction`) | 1 | 행동 < 0이면 닫기. 목표가 실물 속도 0.516 rad/s로 이동(완전히 닫는 데 2.2 s). **한 번 닫으면 에피소드 끝까지 유지(latch)** |
 
 - 팔: 스텝당 0.05 rad = 최대 1.5 rad/s(기존 IK의 관절 목표 속도 한계). 보간은 기존 레포의 33 ms 보간·실물 UR servoJ와 같다.
@@ -109,7 +112,7 @@ Isaac Lab의 보상 관리자는 매 스텝 보상에 **dt(1/30 s)를 곱한다*
 | `approach` | 접근 경로 남은 길이가 에피소드 최고 기록보다 5 mm 줄면 1 (진행 보상) | 잡기 전 | +5 | Isaac Lab core lift `position_command_progress`, DextrAH-G `minimize`. 물러났다 다시 오는 꼼수 방지 |
 | `approach_fine` | `1 − tanh(d / 2 cm)` (TCP–잡는 점 거리) | 잡기 전, 드론 아래 수직선 위(옆 2 cm 이내)일 때만 | +2 | contrib lift의 거친+정밀 보상. 진행 보상만으로는 허리 4 cm 아래에서 멈춤 |
 | `misalign` | `(1 − z_tcp·z_drone) + (1 − \|y_tcp·y_drone\|)` | 항상 | −1 | cabinet `align_ee_handle`. 시작 자세가 이미 정렬이라 벌점 형태 |
-| `gripper_tilt` | `1 − cos(TCP z와 위쪽 사이 각)` | 항상 | −15 | 잡은 뒤 드론과 같이 기울어 `misalign`이 0이 되는 빈틈 |
+| `gripper_tilt` | `1 − cos(TCP z와 위쪽 사이 각)` | 항상 | −25 | 잡은 뒤 드론과 같이 기울어 `misalign`이 0이 되는 빈틈. −15에서는 랜덤화 학습 중 기울기가 15° 한계 가까이 커짐 |
 | `drone_tilt` | `1 − cos(드론 z와 위쪽 사이 각)` | 항상 | −10 | 잡은 드론을 똑바로 |
 | `close_near` | 허리 6 mm 이내·옆 1 cm 이내에서 닫기 명령이면 1 | 잡기 전 | +2 | cabinet `grasp_handle`. 15 mm였을 때 올라가는 중에 닫아 드론을 짜고 기울임 |
 | `finger_contact` | 양쪽 손가락 접촉력 > 1 N이면 1 | 모터 정지 전까지 | +2 | core lift 손가락 접촉 보상, 1 N은 기존 판정기 |
@@ -117,7 +120,7 @@ Isaac Lab의 보상 관리자는 매 스텝 보상에 **dt(1/30 s)를 곱한다*
 | `arm_still` | 팔 행동 제곱 합 | 잡기 확인 뒤 | −1.5 | 비행 물체 잡기(Hu et al. 2023)의 "접촉 뒤 손 멈추기". 닫기 명령부터 걸면 기울기를 못 바로잡아 성공률 82→45% |
 | `success` | 판정 held | 그 순간 한 번 | **+20** | |
 | `failure` | 실패 종료 (놓침·slip, 드론 쳐 냄, 보호 정지) | 그 순간 한 번 | **−5** | core lift `early_termination` |
-| `drone_push` | 잡기 전 드론이 리셋 위치에서 5 mm 넘게 밀린 거리 [m] | 잡기 전 | −20 | 근거 없음, 작게 시작 |
+| `drone_push` | 잡기 전 드론이 hover 목표에서 4 cm 넘게 벗어난 거리 [m] | 잡기 전 | −20 | 근거 없음. 4 cm는 드론 자체 흔들림(약 19 mm RMS)보다 크게 |
 | `action_rate` | `‖aₜ − aₜ₋₁‖²` | 항상 | −0.001 | contrib lift |
 | `joint_vel` | 팔 관절 속도² 합 | 항상 | −0.0001 | contrib lift. MJWarp는 관절 속도 한계를 적용하지 않음 |
 | `joint_limits` | 관절 한계 초과량 | 항상 | −1 | Isaac Lab 기본 |
@@ -134,9 +137,48 @@ Isaac Lab의 보상 관리자는 매 스텝 보상에 **dt(1/30 s)를 곱한다*
 |---|---|---|
 | `grasp_success` | 성공 | 판정 held (판정기 본체, 반드시 첫 번째) |
 | `grasp_failed` | 실패 | 판정 실패: dropped(잡은 위치에서 30 mm), slip(버티기 기준 미달), opened_early(래치로 현재는 안 생김) |
-| `drone_knocked` | 실패 | 잡기 전 드론이 리셋 위치에서 10 cm 넘게 밀림 |
+| `drone_knocked` | 실패 | 잡기 전 드론이 hover 목표에서 10 cm 넘게 벗어남 |
 | `protective_stop` | 실패 | 팔 관절 추종 오차 > 5° 또는 속도 > 200°/s (기존 레포의 UR 보호 정지). 150 N 접촉력 기준은 아직 없음 |
 | `time_out` | 시간 초과 | 12 s |
+
+<br>
+
+## 6-1. 드론 비행 제어기 (`mdp/drone_control.py`)
+
+정책이 아니라 드론 스스로 난다(기존 레포의 PX4 역할). 물리 스텝마다 실행되도록 **행동 차원 0인 action term**으로 만들었다.
+그래서 정책의 행동 크기(7)는 그대로다.
+
+| 항목 | 내용 |
+|---|---|
+| hover 목표 | `p(t) = p0 + Σ (A/2)[sin(2πfⱼt + φⱼ) − sin φⱼ]`, 축마다 사인 2개. 리셋마다 f, φ 새로 뽑음 |
+| 프리셋 (기존 `drone_iris.yaml`) | static 0 / small 20·20·10 mm, 0.2~0.5 Hz / **mid 30·30·15 mm**, 0.05~0.3 Hz / big 50·50·20 mm, 0.05~0.3 Hz |
+| 학습 / 평가 | 학습: 네 프리셋을 같은 확률로. `play`·평가: mid (기존 레포의 수집·평가 기본) |
+| 제어 | 기하 제어기: 위치 PD + 적분(상한 있음) + 목표 가속도 앞먹임 → 원하는 힘. **추력은 몸체 z축 방향만**(쿼드로터처럼 기울어야 이동). 자세 PD로 그 방향을 맞춤 |
+| 게인 | Pegasus Iris 기하 제어기 값(Kp 10, Kd 8.5, Ki 1.5, Kr 3.5, Kw 0.5)을 질량·관성 비율로 0.75배 기체에 맞춤 |
+| 기타 | 몸체 기준 선형 항력, 무작위 외란 힘 (6-2) |
+| 모터 정지 | 판정기의 kill 이후 추력·토크 0. 그 전까지는 잡혀 있어도 목표를 지키려고 그리퍼와 버팀 (PX4와 같음) |
+| `mode="float"` | 몸체별 중력 상쇄만(예전 방식). `check_task`가 사용 |
+
+`scripts/check_hover.py` 결과 (외란 없음): 추종 오차 RMS static 2.1 / small 2.7 / mid 2.6 / big 3.6 mm, 0.3 m/s로 밀면 1.5 s에
+5 mm 이내로 복귀. 외란 0.1 N이면 축당 8.8~10 mm, 전체 19 mm RMS로 기존 레포의 PX4 hover 측정값(19.5 mm RMS, 축당 8~10 mm)과 같다.
+
+<br>
+
+## 6-2. 도메인 랜덤화
+
+문헌(OpenAI in-hand manipulation, DextrAH-G, 비행 물체 잡기)과 기존 레포 측정값을 기준으로 넣었다.
+
+| 항목 | 값 | 시점 | 근거 |
+|---|---|---|---|
+| 드론 외란 힘 (Ornstein-Uhlenbeck) | 축당 표준편차 0.1 N, 상관 시간 0.5 s | 매 물리 스텝 | PX4 hover 흔들림 19.5 mm RMS에 맞춤 |
+| 팔 명령 지연 | 0~1 정책 스텝 (0~33 ms) | 에피소드마다 | 실물 명령→관절 지연 47 ms (기존 레포), Dactyl 행동 지연 |
+| 손가락·드론 마찰 | ×0.7~1.3 (정지 0.42~0.78, 운동 0.35~0.65) | 시작 시 env마다 | Dactyl 범위. 실물 마찰은 아직 미측정 |
+| 드론 질량 | ×0.9~1.1 | 시작 시 env마다 | 제어기가 매 스텝 질량을 읽음 |
+| 팔 구동 강성·감쇠 | ×0.8~1.25 (로그 균등) | 시작 시 env마다 | Dactyl 게인 ×0.75~1.5 |
+| 모션캡처 가림 | 초당 0.2번, 0.1~0.5 s 마지막 값 유지 | 매 스텝 | Dactyl 마커 가림 |
+| 센서 잡음 | 관절·그리퍼·TCP 소량 | 매 스텝 | |
+
+`GraspEnvCfg.disable_randomization()`으로 한 번에 끌 수 있다(`check_task`, 스크립트 시연, `eval_policy.py --no_dr`).
 
 <br>
 
@@ -151,7 +193,7 @@ Isaac Lab의 보상 관리자는 매 스텝 보상에 **dt(1/30 s)를 곱한다*
 | lambda | 0.95 | |
 | 학습률 | 1e-4, adaptive (KL 0.01) | |
 | init_std | 0.5 | 1.0은 손가락을 드론 사이로 넣기엔 너무 흔들림 |
-| entropy | 0.003 | 0.006은 std가 커지고, 0.001은 std가 0.05로 무너짐 |
+| entropy | 0.003 (마지막 미세 조정은 0.001) | 0.006은 std가 커지고, 처음부터 0.001이면 std가 0.05로 무너짐 |
 
 학습·이어서 학습·평가 명령:
 ```bash
@@ -162,6 +204,7 @@ uv run --extra isaacsim isaaclab train --rl_library rsl_rl --task DroneGraspRl-G
     --checkpoint logs/rsl_rl/drone_grasp_ur5/<run>/model_<n>.pt
 # 평가: 25곳 시작, 판정 결과·접근 기하·그리퍼 기울기·slip 원인
 uv run --extra isaacsim python scripts/eval_policy.py --checkpoint logs/rsl_rl/drone_grasp_ur5/<run>/model_<n>.pt
+#   --hover static|small|mid|big (기본 mid), --no_dr (랜덤화 끔)
 # 보기
 uv run --extra isaacsim isaaclab play --rl_library rsl_rl --task DroneGraspRl-Grasp-UR5 --num_envs 16 --viz kit \
     --checkpoint logs/rsl_rl/drone_grasp_ur5/<run>/model_<n>.pt
@@ -188,18 +231,28 @@ uv run --extra isaacsim isaaclab play --rl_library rsl_rl --task DroneGraspRl-Gr
 | 6 | 초기 상태 커리큘럼 (0~10 cm) | 잡기 0% | 그리퍼가 실제로 닫힌 적이 없음 (탐색 잡음이 매 스텝 뒤집음) |
 | 7 | **그리퍼 래치** | 커리큘럼에서만 성공, 먼 접근 잊음 | 쉬움과 원래 난이도 사이가 비어 있음 |
 | 8 | 커리큘럼 0~30 cm | **23% → 89%** (이어서 학습) | |
-| 9~10 | 기울기 보상, 허리에서만 닫기, 잡은 뒤 팔 정지 | **93~94%** (기울기 조건 포함), 잡은 뒤 최대 기울기 39° → 13° | |
+| 9~10 | 기울기 보상, 허리에서만 닫기, 잡은 뒤 팔 정지 | **93~94%** (정지 드론, 기울기 조건 포함), 잡은 뒤 최대 기울기 39° → 13° | |
+| 11 | 비행 제어기 + hover 프리셋 | 제어기 드론에서 10d는 static 75% / mid 69% → 학습 후 95% / 89% (랜덤화 없음) | 닿으면 되밀고 kill 전까지 버티는 드론에 다시 학습 필요 |
+| 12 | 도메인 랜덤화 | mid 79% → 85%, 기울기 8° | 랜덤화로 탐색 잡음(std)이 0.84까지 커짐 |
+| 12b | entropy 0.001 | 68%, 기울기 13° | std는 줄지 않고 기울기만 커짐 |
+| **12c** | entropy 0.001 + 기울기 벌점 −25 | **mid 87~91%** | 채택 |
 
-- 채택 정책 계보: `try5a` → `try6b` → `try7b` → `try8b` → `try8c` → `try9b` → `try10d` (`model_8194.pt`, 약 8200 iteration)
+- 채택 정책 계보: `try5a` → `try6b` → `try7b` → `try8b` → `try8c` → `try9b` → `try10d` → `try11a` → `try12_dr` →
+  `try12c_dr_lowent_tilt25` (`model_12691.pt`, 약 12700 iteration, 2048 env 기준 약 5시간)
+- 미세 조정 명령에 쓴 오버라이드: `try12c`는 `agent.algorithm.entropy_coef=0.001 env.rewards.gripper_tilt.weight=-25.0`
+  (기울기 −25는 이제 설정 기본값)
 - `logs/`는 git에 올라가지 않는다. 다른 PC로 옮기려면 run 폴더를 복사한다.
 
-### 현재 정책 평가 (try10d, 25곳, 256회)
-| seed | 성공 | slip | 드론 쳐 냄 | 시간 초과 | 버티기 끝 기울기 (중앙값) | 잡은 뒤 최대 기울기 (중앙값) |
-|---|---|---|---|---|---|---|
-| 1 | 237 (93%) | 16 | 3 | 0 | — | 13.7° |
-| 2 | 241 (94%) | 14 | 0 | 1 | 8.8° | 13.4° |
+### 현재 정책 평가 (try12c, 25곳, 256회, seed 1)
+| 조건 | 성공 | slip | 드론 쳐 냄 | 시간 초과 | 버티기 끝 기울기 (중앙값 / 최대) |
+|---|---|---|---|---|---|
+| **mid, 랜덤화 켬** | **232 (91%)** (seed 2: 223, 87%) | 8 | 14 | 2 | 8.1° / 14.5° |
+| big, 랜덤화 켬 | 210 (82%) | 5 | 40 | 1 | 7.9° / 15.4° |
+| static, 랜덤화 켬 | 247 (96%) | 6 | 3 | 0 | 8.3° / 13.9° |
+| mid, 랜덤화 끔 | 234 (91%) | 14 | 4 | 4 | 8.2° / 15.2° |
 
-남은 slip은 대부분 "마지막 0.5 s 변화 ≤ 0.5 mm" 기준이다. 스크립트 전문가의 그리퍼 기울기는 0.2°로, 정책(약 9°)보다 훨씬 작다.
+- 남은 실패: big에서는 드론 쳐 냄(16%)이 대부분, 나머지는 slip(마지막 0.5 s 안정성)
+- 잡은 순간의 일시적 최대 기울기 중앙값은 약 14°, 버티기 끝에는 약 8°. 스크립트 전문가는 0.2°
 
 <br>
 
@@ -216,8 +269,8 @@ uv run --extra isaacsim isaaclab play --rl_library rsl_rl --task DroneGraspRl-Gr
 
 ## 10. 아직 없는 것
 
-- 드론 hover 제어기와 움직이는 목표 (사인파 프리셋 small/mid/big)
-- 도메인 랜덤화 (마찰·질량·게인, 행동 지연, 드론 외란, 모션캡처 가림)
+- 판정 기울기 한계를 더 좁히는 커리큘럼 (15° → 10° → 5°)
+- 드론 접근 속도·잡는 순간 기울기를 더 줄이는 보상 (스크립트 전문가 수준)
 - Newton에서의 파지 학습 (접촉 조정 필요)
 - 보호 정지의 150 N 접촉력 기준, 그리퍼 몸통–드론 접촉 벌점(`bad_contact`)
 - 카메라, LeRobot 데이터 내보내기, 스튜어트 플랫폼

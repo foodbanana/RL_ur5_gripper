@@ -223,7 +223,8 @@ class RewardsCfg:
     # gripper axes vs drone axes; a penalty since the start pose is already aligned [0 when aligned]
     misalign = RewTerm(func=mdp.misalignment, weight=-1.0)
     # gripper approach axis vs up, always (after the grasp the drone turns with the gripper, so misalign is blind)
-    gripper_tilt = RewTerm(func=mdp.gripper_tilt, weight=-15.0)
+    # -25: with -15 the randomized training let the end-of-hold tilt grow to a median 8-13 deg near the 15 deg limit
+    gripper_tilt = RewTerm(func=mdp.gripper_tilt, weight=-25.0)
     # held drone tilted from up (zero while it hovers upright)
     drone_tilt = RewTerm(func=mdp.drone_tilt, weight=-10.0)
     # arm action once the judge has the grasp (gated on the close command instead, the policy could not correct the
