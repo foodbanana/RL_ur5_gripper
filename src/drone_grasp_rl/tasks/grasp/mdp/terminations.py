@@ -14,6 +14,7 @@ import torch
 
 from isaaclab.managers import SceneEntityCfg
 
+from .drone_control import drone_target_pos_b
 from .judge import APPROACH, get_judge
 from .observations import frame_pos_b
 
@@ -25,12 +26,11 @@ if TYPE_CHECKING:
 def drone_knocked(
     env: ManagerBasedRLEnv,
     max_distance: float = 0.10,
-    reset_event: str = "reset_drone",
     sensor_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
 ) -> torch.Tensor:
-    """Before the grasp, the drone was pushed more than ``max_distance`` [m] from where the reset put it."""
-    start = env.event_manager.get_term_cfg(reset_event).func.reset_pos_b
-    moved = (frame_pos_b(env, "drone", sensor_cfg) - start).norm(dim=-1)
+    """Before the grasp, the drone is more than ``max_distance`` [m] from where it is supposed to be (its hover
+    target, or the reset position without a flight controller)."""
+    moved = (frame_pos_b(env, "drone", sensor_cfg) - drone_target_pos_b(env)).norm(dim=-1)
     return (get_judge(env).phase == APPROACH) & (moved > max_distance)
 
 

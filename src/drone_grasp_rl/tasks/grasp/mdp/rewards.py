@@ -20,6 +20,7 @@ import isaaclab.utils.math as math_utils
 from isaaclab.managers import ManagerTermBase, SceneEntityCfg
 
 from .actions import _to_index
+from .drone_control import drone_target_pos_b
 from .judge import APPROACH, GRASPED, KILLED, get_judge
 from .observations import frame_pos_b, frame_pose_b, frame_pose_w
 
@@ -221,10 +222,11 @@ def hold(env: ManagerBasedRLEnv, min_force: float = 1.0, max_settle: float = 0.0
     return ((judge.phase == KILLED) & (right > min_force) & (left > min_force) & settled).float()
 
 
-def drone_push(env: ManagerBasedRLEnv, deadband: float = 0.005, reset_event: str = "reset_drone") -> torch.Tensor:
-    """Distance the drone was pushed from its reset position beyond ``deadband``, before the grasp [m], shape (N,)."""
-    start = env.event_manager.get_term_cfg(reset_event).func.reset_pos_b
-    moved = (frame_pos_b(env, "drone") - start).norm(dim=-1)
+def drone_push(env: ManagerBasedRLEnv, deadband: float = 0.005) -> torch.Tensor:
+    """Distance of the drone from where it is supposed to be (hover target or reset position) beyond ``deadband``,
+    before the grasp [m], shape (N,). The flight controller's own tracking error counts too; it stays within a few
+    mm without contact."""
+    moved = (frame_pos_b(env, "drone") - drone_target_pos_b(env)).norm(dim=-1)
     return (moved - deadband).clamp(min=0.0) * (get_judge(env).phase == APPROACH)
 
 

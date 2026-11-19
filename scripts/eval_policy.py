@@ -42,6 +42,7 @@ parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 parser.add_argument("--checkpoint", type=str, required=True)
 parser.add_argument("--num_envs", type=int, default=128)
 parser.add_argument("--seed", type=int, default=0)
+parser.add_argument("--hover", type=str, default="mid", help="Hover preset: static, small, mid, big.")
 add_launcher_args(parser)
 parser.set_defaults(device=None)
 args_cli, hydra_args = setup_preset_cli(parser, sys.argv[1:])
@@ -59,6 +60,7 @@ def main():
     agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, check_rsl_rl_version())
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.events.reset_drone.params["near_fraction"] = 0.0  # the 25 reference positions only, no curriculum
+    env_cfg.actions.drone_hover.preset_weights = {args_cli.hover: 1.0}
     env_cfg.seed = args_cli.seed
     if args_cli.device is not None:
         env_cfg.sim.device = args_cli.device
@@ -112,7 +114,7 @@ def main():
                         hold[i] = judge.hold_metrics[i]
                     done_once[i] = True
 
-        print(f"[eval] checkpoint: {args_cli.checkpoint}")
+        print(f"[eval] checkpoint: {args_cli.checkpoint} (hover preset: {args_cli.hover})")
         print(f"[eval] outcomes over {n} episodes: {dict(Counter(outcomes))}")
         judged = ~torch.isnan(hold[:, 3])
         if judged.any():

@@ -60,6 +60,9 @@ def main():
     env_cfg, _ = resolve_task_config(TASK, "")
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.events.reset_drone.params["near_fraction"] = 0.0  # the 25 reference positions only, no curriculum
+    # a hovering drone: the expert freezes the arm while closing, which only works on a still target (as in the
+    # data collection repo, where hover episodes were teleoperated)
+    env_cfg.actions.drone_hover.preset_weights = {"static": 1.0}
     env_cfg.seed = args_cli.seed
     if args_cli.device is not None:
         env_cfg.sim.device = args_cli.device

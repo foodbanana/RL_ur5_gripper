@@ -4,6 +4,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 __all__ = [
+    "HOVER_PRESETS",
+    "DroneHoverController",
+    "DroneHoverControllerCfg",
+    "drone_target_pos_b",
     "APPROACH",
     "FAILED",
     "GRASPED",
@@ -51,6 +55,7 @@ from .actions import (
     ProfiledBinaryJointPositionAction,
     ProfiledBinaryJointPositionActionCfg,
 )
+from .drone_control import HOVER_PRESETS, DroneHoverController, DroneHoverControllerCfg, drone_target_pos_b
 from .events import hold_drone_in_place, reset_drone_at_targets
 from .judge import APPROACH, FAILED, GRASPED, HELD, KILLED, get_judge, grasp_failed, grasp_judge
 from .observations import contact_forces, frame_pos_b, frame_pose_b, frame_pose_w, frame_quat_b, mocap_drone_pose_b

@@ -60,6 +60,10 @@ def main():
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.events.reset_drone.params["near_fraction"] = 0.0  # the 25 reference positions only, no curriculum
     env_cfg.actions.gripper_action.latch_close = False  # the close check opens the gripper again
+    # The drone only floats (no position control, no drag): the checks push it and measure the mocap lag on a drone
+    # drifting at constant velocity. scripts/check_hover.py checks the flight controller.
+    env_cfg.actions.drone_hover.preset_weights = {"static": 1.0}
+    env_cfg.actions.drone_hover.mode = "float"
     env_cfg.episode_length_s = 60.0  # no time-out resets during the checks
     # No success/failure resets either: the grasp check closes on a teleported drone. The judge, which also stops
     # the drone motors, is checked by scripts/scripted_grasp.py.

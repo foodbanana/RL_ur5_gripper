@@ -113,6 +113,7 @@ scripts/
 ├── check_task.py            # task checks: reset positions, mocap model, action contract, contact sensors, grasp
 ├── scripted_grasp.py        # IK expert runs the full episode protocol and reports the judge's outcomes
 ├── eval_policy.py           # trained checkpoint: judge outcomes and approach geometry on the 25 reference starts
+├── check_hover.py           # drone flight controller: hover tracking per preset, recovery after a push
 └── fix_isaacsim_fastfinder.sh, list_envs.py
 tests/                 # registration test
 ```

@@ -117,10 +117,17 @@ class GraspSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class ActionsCfg:
-    """Arm and gripper action terms, set by the robot config."""
+    """Arm and gripper action terms (set by the robot config) and the drone's own flight controller (no policy
+    input)."""
 
     arm_action: ActionTermCfg = MISSING
     gripper_action: ActionTermCfg = MISSING
+    # Training samples every hover preset; evaluation and play use "mid", the data collection default.
+    drone_hover = mdp.DroneHoverControllerCfg(
+        asset_name="drone",
+        body_name=DRONE_BODY_NAME,
+        preset_weights={"static": 1.0, "small": 1.0, "mid": 1.0, "big": 1.0},
+    )
 
 
 @configclass
@@ -172,8 +179,6 @@ class EventCfg:
         mode="reset",
         params={"targets": DRONE_TARGETS_BASE, "offset": DRONE_TARGET_OFFSET},
     )
-
-    hold_drone = EventTerm(func=mdp.hold_drone_in_place, mode="reset")
 
 
 @configclass
@@ -261,3 +266,4 @@ class GraspEnvCfg(ManagerBasedRLEnvCfg):
         self.scene.ee_frame.debug_vis = True
         # play and evaluation use the real start distribution, without the near-grasp curriculum
         self.events.reset_drone.params["near_fraction"] = 0.0
+        self.actions.drone_hover.preset_weights = {"mid": 1.0}
