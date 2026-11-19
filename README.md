@@ -93,6 +93,9 @@ features (`rerun`, `wandb`, `skrl`, ...), pass the matching extra from `pyprojec
 
 ## Project structure
 
+The RL design (observations, actions, rewards, judge, training history) is documented in Korean in
+[docs/rl_design.md](docs/rl_design.md).
+
 ```
 src/drone_grasp_rl/
 ├── physics.py         # physics backends (PhysX default, Newton MJWarp) and the 120 Hz step
