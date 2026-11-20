@@ -151,6 +151,7 @@ hover static 10% / small 30% / mid 40% / big 20%, 실물 데이터와 같은 스
 | 2-5 본 녹화 | 선생 `try20b`, 16 env, seed 1: **300개, 50,830 프레임 (평균 6.8 s)**, 534 s (20 라운드). 녹화한 312개 중 성공 300 (96%). hover static 36 / small 93 / mid 117 / big 54. 중간 파일 9.4 GB → LeRobot v2.1 **192 MB**, 검수 5/5 PASS (`datasets/lerobot_v21/local/teacher20b_vdr_300`) |
 
 | depth (추가) | `record_demos.py --depth`: 같은 손목 카메라의 `distance_to_image_plane` → 실물 D435i처럼 만든 depth (`camera.realsense_depth_mm`): 0.14 m보다 가깝거나 10 m보다 멀면 0, 깊이에 따른 잡음(1 m에서 4.7 mm), 물체 경계 구멍, 1 mm 단위. 중간 파일 `wrist_depth/*.png` (16비트 mm). LeRobot은 `--with-depth`일 때만 `depth/chunk-*/episode_*.npz` (uint16, 에피소드별)와 `meta/depth_info.json` 추가 — lerobot 0.3.3이 1채널 16비트 영상을 저장하지 못하기 때문. 기본 스키마는 RGB만 그대로 |
+| depth 본 녹화 | `--depth`, seed 2: **300개, 50,772 프레임**, 636 s, 녹화한 318개 중 성공 300. LeRobot (`local/teacher20b_vdr_depth_300`) **4.7 GB** (depth npz가 대부분), 중간 파일 14 GB, 검수 6/6 PASS |
 
 알게 된 점
 - Isaac Lab `PinholeCameraCfg.from_intrinsic_matrix`는 주점 오프셋(cx, cy)을 버린다 → 기존 레포 식으로 직접 계산
