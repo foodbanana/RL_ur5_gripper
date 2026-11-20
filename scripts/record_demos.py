@@ -6,7 +6,8 @@ the same as ``lerobot_stage1_extract_bag.py`` makes from a ROS bag):
 
     <out>/<episode>/states.npy (T, 7)   arm joints [rad] + gripper position / closed position (0 = open, 0-1)
                     actions.npy (T, 7)  arm joint goals [rad] sent to the drives + gripper command {0, 1}
-                    base_imu.npy (T, 6) fixed base: [0, 0, 0, 0, 0, 9.81]
+                    base_imu.npy (T, 6) fixed base: [0, 0, 0, 0, 0, 9.81]; moving base (Stewart, Husky
+                                        tasks): measured gyro + specific force in the base frame
                     timestamps.npy (T,) k / 25 s
                     wrist/000000.png    640x480 RGB
                     wrist_depth/000000.png  with --depth: 16-bit, mm, 0 = no reading (real-like D435i, camera.py)
@@ -79,6 +80,12 @@ STATE_NAMES = [
 
 parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 parser.add_argument("--checkpoint", type=str, required=True, help="Teacher policy checkpoint.")
+parser.add_argument(
+    "--task",
+    type=str,
+    default=TASK,
+    help="Recording task: DroneGraspRl-Grasp-UR5-Record (fixed base), -Stewart-Record or -Husky-Record.",
+)
 parser.add_argument("--num_episodes", type=int, default=10, help="Successful episodes to save.")
 parser.add_argument("--num_envs", type=int, default=16)
 parser.add_argument("--name", type=str, default=None, help="Recording name (folder below --out_root).")
@@ -94,6 +101,7 @@ add_launcher_args(parser)
 parser.set_defaults(device=None)
 args_cli, hydra_args = setup_preset_cli(parser, sys.argv[1:])
 sys.argv = [sys.argv[0]] + hydra_args
+TASK = args_cli.task
 
 
 def git_commit() -> str:
@@ -162,6 +170,16 @@ def main():
         arm_ids = arm_term.joint_ids
         grip_id = robot.find_joints(GRIPPER_JOINT_NAME)[0][0]
 
+        # moving base: the base IMU as the robot would log it (same model as the policy's observation)
+        moving = "base_motion" in base.action_manager.active_terms
+        imu = None
+        if moving:
+            from isaaclab.managers import ObservationTermCfg
+
+            from drone_grasp_rl.tasks.grasp.mdp import base_imu
+
+            imu = base_imu(ObservationTermCfg(func=base_imu, params={}), base)
+
         # the command of each step, captured inside the step before a reset can clear it
         sent = {}
         arm_process, grip_process = arm_term.process_actions, grip_term.process_actions
@@ -185,13 +203,19 @@ def main():
             if args_cli.depth:
                 raw = cam.data.output["distance_to_image_plane"]
                 depth = camera.realsense_depth_mm(getattr(raw, "torch", raw), depth_gen).cpu().numpy().astype(np.uint16)
-            return state.cpu().numpy(), rgb.cpu().numpy(), depth
+            return state.cpu().numpy(), rgb.cpu().numpy(), depth, (None if imu is None else imu(base).cpu().numpy())
 
         depth_gen = torch.Generator(device=base.device)
         depth_gen.manual_seed(args_cli.seed)
 
         def episode_info(i):
-            return {
+            extra = {}
+            if moving:
+                motion = base.action_manager.get_term("base_motion")
+                extra["base_motion"] = type(motion).__name__
+                if hasattr(motion, "preset_names"):
+                    extra["base_motion_preset"] = motion.preset_names[int(motion.preset_index[i])]
+            return extra | {
                 "hover_preset": hover.preset_names[int(hover.preset_index[i])],
                 "drone_target_index": int(reset_ev.target_index[i]),
                 "drone_reset_pos_base": [round(float(x), 5) for x in reset_ev.reset_pos_b[i]],
@@ -212,7 +236,11 @@ def main():
             actions = np.stack([buf["actions"][k] for k in frames]).astype(np.float32)
             np.save(os.path.join(ep_dir, "states.npy"), states)
             np.save(os.path.join(ep_dir, "actions.npy"), actions)
-            np.save(os.path.join(ep_dir, "base_imu.npy"), np.tile(np.float32(BASE_IMU_CONST), (len(frames), 1)))
+            if moving:
+                base_imu_arr = np.stack([buf["imu"][k] for k in frames]).astype(np.float32)
+            else:
+                base_imu_arr = np.tile(np.float32(BASE_IMU_CONST), (len(frames), 1))
+            np.save(os.path.join(ep_dir, "base_imu.npy"), base_imu_arr)
             np.save(os.path.join(ep_dir, "timestamps.npy"), np.arange(len(frames), dtype=np.float64) / FPS)
             for j, k in enumerate(frames):
                 jobs.append(
@@ -250,7 +278,7 @@ def main():
                 "arm_action_source": "arm_action goal (filtered, slowed) sent to the joint drives, 30 Hz",
                 "gripper_action_source": "gripper close command (latched), 30 Hz",
                 "gripper_scale": "joint position / closed position (0 = open, 1 = closed); command {0, 1}",
-                "base_imu": "const",
+                "base_imu": "measured" if moving else "const",
                 "base_imu_names": ["gyro_x", "gyro_y", "gyro_z", "accel_x", "accel_y", "accel_z"],
                 "image_keys": ["wrist"],
                 "depth_keys": ["wrist_depth"] if args_cli.depth else [],
@@ -320,7 +348,7 @@ def main():
                     grip_cmd = sent["grip"].float().cpu().numpy()
                     killed = (judge.phase == KILLED).cpu().numpy()
                     done = dones.bool().cpu().numpy()
-                    states, images, depths = observe()
+                    states, images, depths, imus = observe()
                     for i in range(n):
                         if not active[i]:
                             continue
@@ -331,6 +359,7 @@ def main():
                                     "actions": [],
                                     "images": [],
                                     "depth": [],
+                                    "imu": [],
                                     "kill_step": None,
                                     "info": info_now[i],
                                 }
@@ -338,6 +367,7 @@ def main():
                             buf["states"].append(pending[i][0])
                             buf["images"].append(pending[i][1])
                             buf["depth"].append(pending[i][2])
+                            buf["imu"].append(pending[i][3])
                             buf["actions"].append(np.concatenate([arm_cmd[i], grip_cmd[i : i + 1]]))
                             if buf["kill_step"] is None and killed[i]:
                                 buf["kill_step"] = len(buf["states"])
@@ -354,7 +384,12 @@ def main():
                                 saved += 1
                             buffers[i] = None
                         else:
-                            pending[i] = (states[i], images[i], None if depths is None else depths[i])
+                            pending[i] = (
+                                states[i],
+                                images[i],
+                                None if depths is None else depths[i],
+                                None if imus is None else imus[i],
+                            )
                 print(f"[record] round {rounds}: saved {saved}/{args_cli.num_episodes}, outcomes {dict(outcomes)}")
         for job in jobs:
             job.result()

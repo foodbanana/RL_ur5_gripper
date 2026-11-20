@@ -48,3 +48,18 @@ class PPORunnerCfg(RslRlOnPolicyRunnerCfg):
         desired_kl=0.01,
         max_grad_norm=1.0,
     )
+
+
+@configclass
+class StudentPPORunnerCfg(PPORunnerCfg):
+    """RL fine-tuning of the distilled student: the actor sees only the deployable ``student`` group (ArUco marker
+    drone pose, joints, last actions, 3 steps); the critic keeps the teacher's privileged input. Start from
+    ``scripts/student_to_ppo.py`` (student weights as the actor, the teacher's critic)."""
+
+    experiment_name = "drone_grasp_ur5_student"
+    obs_groups = {"actor": ["student"], "critic": ["policy", "critic"]}
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.algorithm.entropy_coef = 0.0005
+        self.algorithm.learning_rate = 3.0e-5

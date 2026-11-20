@@ -43,6 +43,7 @@ parser.add_argument("--checkpoint", type=str, required=True)
 parser.add_argument("--num_envs", type=int, default=128)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--hover", type=str, default="mid", help="Hover preset: static, small, mid, big.")
+parser.add_argument("--base_preset", type=str, default=None, help="Moving-base tasks: one motion preset at full size.")
 parser.add_argument("--no_dr", action="store_true", help="Evaluate without the domain randomization.")
 parser.add_argument(
     "--camera_view",
@@ -104,6 +105,9 @@ def main():
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.events.reset_drone.params["near_fraction"] = 0.0  # the 25 reference positions only, no curriculum
     env_cfg.actions.drone_hover.preset_weights = {args_cli.hover: 1.0}
+    if args_cli.base_preset is not None:  # one base motion preset at full amplitude, no ramp
+        env_cfg.actions.base_motion.preset_weights = {args_cli.base_preset: 1.0}
+        env_cfg.curriculum.base_motion.params.update(initial=1.0, final=1.0)
     if args_cli.no_dr:
         env_cfg.disable_randomization()
     env_cfg.seed = args_cli.seed
@@ -115,10 +119,12 @@ def main():
         env = RslRlVecEnvWrapper(gym.make(TASK, cfg=env_cfg), clip_actions=agent_cfg.clip_actions)
         cleanup.callback(env.close)
         runner = create_rsl_rl_runner(env, agent_cfg)
-        # actor and critic only: checkpoints made by expand_policy_inputs.py carry no optimizer state
-        runner.load(
-            args_cli.checkpoint, load_cfg={"actor": True, "critic": True, "optimizer": False, "iteration": True}
-        )
+        if getattr(agent_cfg, "class_name", "") == "DistillationRunner":  # a distilled student (it acts)
+            runner.load(args_cli.checkpoint, load_cfg={"student": True, "teacher": True, "iteration": True})
+        else:  # actor and critic only: checkpoints made by expand_policy_inputs.py carry no optimizer state
+            runner.load(
+                args_cli.checkpoint, load_cfg={"actor": True, "critic": True, "optimizer": False, "iteration": True}
+            )
         policy = runner.get_inference_policy(device=env.unwrapped.device)
         base = env.unwrapped
         n, dev = base.num_envs, base.device

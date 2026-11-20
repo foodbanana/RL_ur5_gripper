@@ -130,6 +130,7 @@ def randomize_visuals(env, rng: random.Random) -> dict:
         height = rng.uniform(*CEILING_HEIGHT_RANGE)
         _set_color(stage, f"{root}/Ceiling", ceiling)
         _set_height(stage, f"{root}/Ceiling", height)
-        _set_color(stage, f"{root}/Table", table)
+        if stage.GetPrimAtPath(f"{root}/Table"):  # moving bases have no table
+            _set_color(stage, f"{root}/Table", table)
         look["envs"].append({"ceiling_color": ceiling, "ceiling_height": height, "table_color": table})
     return look

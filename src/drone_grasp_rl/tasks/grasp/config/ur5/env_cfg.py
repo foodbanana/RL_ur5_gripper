@@ -175,19 +175,25 @@ class UR5GraspRecordEnvCfg(UR5GraspEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
-        from .camera import wrist_camera_cfg
-        from .visuals import ceiling_cfg, key_light_cfg
+        _setup_recording(self)
 
-        self.scene.wrist_cam = wrist_camera_cfg()
-        # backdrop and shadows for the camera; randomized between recording rounds (visuals.randomize_visuals)
-        self.scene.ceiling = ceiling_cfg()
-        self.scene.key_light = key_light_cfg()
-        self.scene.num_envs = 16
-        # visual randomization edits per-environment USD prims; replicated environments are clones the renderer does
-        # not read back from USD (a changed ceiling color did not show), as Isaac Lab's visual color terms also require
-        self.scene.replicate_physics = False
-        self.events.reset_drone.params["near_fraction"] = 0.0
-        self.curriculum = None
+
+def _setup_recording(cfg):
+    """Wrist camera, a ceiling and a key light for visual randomization, the 25 reference starts only."""
+    from .camera import wrist_camera_cfg
+    from .visuals import ceiling_cfg, key_light_cfg
+
+    cfg.scene.wrist_cam = wrist_camera_cfg()
+    # backdrop and shadows for the camera; randomized between recording rounds (visuals.randomize_visuals)
+    cfg.scene.ceiling = ceiling_cfg()
+    cfg.scene.key_light = key_light_cfg()
+    cfg.scene.num_envs = 16
+    # visual randomization edits per-environment USD prims; replicated environments are clones the renderer does
+    # not read back from USD (a changed ceiling color did not show), as Isaac Lab's visual color terms also require
+    cfg.scene.replicate_physics = False
+    cfg.events.reset_drone.params["near_fraction"] = 0.0
+    # no curricula: rewards do not matter while recording, and a moving base keeps its full amplitude (scale 1)
+    cfg.curriculum = None
 
 
 @configclass
@@ -336,3 +342,21 @@ class UR5GraspHuskyEnvCfg(UR5GraspEnvCfg):
         )
         self.observations.policy.base_imu = ObsTerm(func=mdp.base_imu)
         self.curriculum.base_motion = CurrTerm(func=mdp.ramp_base_motion, params={"initial": 0.0, "final": 1.0})
+
+
+@configclass
+class UR5GraspStewartRecordEnvCfg(UR5GraspStewartEnvCfg):
+    """:class:`UR5GraspStewartEnvCfg` with the recording setup (wrist camera, visual randomization), full motion."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        _setup_recording(self)
+
+
+@configclass
+class UR5GraspHuskyRecordEnvCfg(UR5GraspHuskyEnvCfg):
+    """:class:`UR5GraspHuskyEnvCfg` with the recording setup (wrist camera, visual randomization), full motion."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        _setup_recording(self)
