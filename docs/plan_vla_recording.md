@@ -133,3 +133,46 @@
 - 렌더링 속도: 640×480 × env 여러 개는 느리고 VRAM을 많이 씀 → env 수를 줄여서 시작 (카메라 1대라 2대일 때의 절반)
 - sim 영상과 실물 영상의 차이(sim2real 시각 격차): 시각 랜덤화로 줄이지만, 실물 데이터 소량과 섞는 것이 가장 확실
 - 선생이 특권 정보로만 알 수 있는 행동(예: 접촉력 보고 판단)을 VLA가 따라 하기 어려울 수 있음 → 학습 후 VLA 성공률로 확인
+
+<br>
+
+## 10. 진행 결과 (2026-11-20)
+
+8장의 결정은 추천안으로 진행했다(검토 후 바꿀 수 있음): 30 Hz 녹화 → 25 fps, 640×480 RGB만, 성공 에피소드만,
+hover static 10% / small 30% / mid 40% / big 20%, 실물 데이터와 같은 스키마(섞을 수 있게).
+
+| 단계 | 결과 |
+|---|---|
+| 2-1 손목 카메라 | `DroneGraspRl-Grasp-UR5-Record` 태스크 = 학습 태스크 + 손목 카메라(`config/ur5/camera.py`). TCP가 영상 (332.3, 445.6) px에 투영됨 — 기존 레포 측정값 (332, 446)과 같음 (`scripts/check_wrist_camera.py`) |
+| 2-2 녹화 | `scripts/record_demos.py`: 선생(결정적 행동)으로 돌려 성공한 에피소드만 기존 1단계 중간 파일 형식(`schema_version` 2)으로 저장. 8 env로 10개 33 s |
+| 2-3 LeRobot v2.1 | `tools/lerobot_export` (기존 병합·검수 스크립트 복사, 손목 1대, lerobot 0.3.3 별도 uv 환경). 검수 5/5 PASS, `info.json` feature가 실물 데이터셋과 같음 (외부 카메라 키만 없음). 잡은 뒤 그리퍼 state 0.25 (실물 0.18~0.28) |
+| 2-4 시각 랜덤화 | `config/ur5/visuals.py`: 라운드마다 조명(dome·key light 밝기, 색, 방향), env별 천장 색·높이, 테이블 색. 라운드 사이에만 바꿔서 에피소드 도중에는 안 바뀜 |
+
+| 2-5 본 녹화 | 선생 `try20b`, 16 env, seed 1: **300개, 50,830 프레임 (평균 6.8 s)**, 534 s (20 라운드). 녹화한 312개 중 성공 300 (96%). hover static 36 / small 93 / mid 117 / big 54. 중간 파일 9.4 GB → LeRobot v2.1 **192 MB**, 검수 5/5 PASS (`datasets/lerobot_v21/local/teacher20b_vdr_300`) |
+
+알게 된 점
+- Isaac Lab `PinholeCameraCfg.from_intrinsic_matrix`는 주점 오프셋(cx, cy)을 버린다 → 기존 레포 식으로 직접 계산
+- `replicate_physics=True`이면 env별 USD를 바꿔도 렌더러에 안 보인다 → 녹화 장면은 `False`
+- UsdPreviewSurface 색은 실행 중에 바꿔도 영상에 안 보인다 → OmniPBR(MDL) 재질의 `diffuse_color_constant`를 바꿈
+- `pxr`을 Isaac Sim 시작 전에 import하면 RTX 플러그인이 깨진다 → 함수 안에서 import
+
+다시 해 보는 명령 (레포 루트)
+```bash
+# 손목 카메라 확인 (outputs/wrist_camera/에 영상)
+uv run --extra isaacsim python scripts/check_wrist_camera.py
+uv run --extra isaacsim python scripts/check_wrist_camera.py --visual_dr --out outputs/wrist_camera_vdr
+# 녹화 (datasets/intermediate/<이름>/)
+uv run --extra isaacsim python scripts/record_demos.py \
+    --checkpoint logs/rsl_rl/drone_grasp_ur5/<try20b 폴더>/model_17097.pt --num_episodes 300 --num_envs 16 --seed 1 --name <이름>
+# LeRobot v2.1로 변환·검수 (datasets/lerobot_v21/local/<이름>/)
+uv sync --project tools/lerobot_export --locked
+uv run --project tools/lerobot_export python tools/lerobot_export/lerobot_merge_episodes_v21.py \
+    --all --intermediate-dir datasets/intermediate/<이름> --repo-id local/<이름>
+uv run --project tools/lerobot_export python tools/lerobot_export/inspect_dataset_v21.py datasets/lerobot_v21/local/<이름> --load
+```
+
+남은 것
+- 시각 다양성: 지금은 단색 천장과 조명뿐. 실험실 천장 사진 텍스처, NuRec 배경, 카메라 노출·화이트밸런스 변화
+- depth 저장 여부 (8장 6번)
+- Stewart·Husky 베이스 변형에서의 녹화 (`base_imu`가 상수가 아님)
+- VLA 학습 스모크 테스트 (2-6)

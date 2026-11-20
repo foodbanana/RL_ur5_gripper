@@ -86,6 +86,24 @@ uv run --extra isaacsim isaaclab benchmark training --rl_library rsl_rl --task $
 Checkpoints are written to `logs/rsl_rl/<experiment>/<timestamp>/`. `logs/` is git-ignored, so trained policies stay
 on the machine that trained them. To share a policy, copy that run folder to the other machine's `logs/rsl_rl/<experiment>/`.
 
+### Record VLA demonstrations
+
+The trained teacher generates demonstrations in the LeRobot v2.1 schema of the data collection repo, with the wrist
+camera only (`observation.images.wrist`, 640x480, 25 fps). Successful episodes only; lights, ceiling and table colors
+change between recording rounds. See [docs/plan_vla_recording.md](docs/plan_vla_recording.md) (Korean).
+
+```bash
+uv run --extra isaacsim python scripts/record_demos.py \
+    --checkpoint logs/rsl_rl/drone_grasp_ur5/<run>/model_<n>.pt --num_episodes 300 --num_envs 16 --name <name>
+uv sync --project tools/lerobot_export --locked   # lerobot 0.3.3 in its own environment
+uv run --project tools/lerobot_export python tools/lerobot_export/lerobot_merge_episodes_v21.py \
+    --all --intermediate-dir datasets/intermediate/<name> --repo-id local/<name>
+uv run --project tools/lerobot_export python tools/lerobot_export/inspect_dataset_v21.py \
+    datasets/lerobot_v21/local/<name> --load
+```
+
+`datasets/` is git-ignored.
+
 Use `physics=<PRESET>` to select any preset listed by `isaaclab list_envs --show_presets`. To use other optional
 features (`rerun`, `wandb`, `skrl`, ...), pass the matching extra from `pyproject.toml`, for example
 `uv run --extra isaacsim --extra rerun isaaclab ... --viz rerun`.
@@ -105,7 +123,8 @@ src/drone_grasp_rl/
     ├── grasp/         # drone grasp task family
     │   ├── grasp_env_cfg.py   # scene, observations, events, rewards shared by all robots
     │   ├── mdp/               # task terms (drone reset and hold, profiled gripper action, ...)
-    │   └── config/ur5/        # UR5 scene, sensors, actions, registration, agent configs
+    │   └── config/ur5/        # UR5 scene, sensors, actions, registration, agent configs; wrist camera and
+    │                          #   visual randomization of the recording task
     └── balance/       # template example (cart-pole)
 scripts/
 ├── convert_assets.py        # URDF -> robot USD (rerun after changing the URDF or meshes)
@@ -115,7 +134,10 @@ scripts/
 ├── scripted_grasp.py        # IK expert runs the full episode protocol and reports the judge's outcomes
 ├── eval_policy.py           # trained checkpoint: judge outcomes and approach geometry on the 25 reference starts
 ├── check_hover.py           # drone flight controller: hover tracking per preset, recovery after a push
+├── check_wrist_camera.py    # recording task: wrist camera images with the projected TCP and drone
+├── record_demos.py          # teacher rollouts -> intermediate episode folders (wrist images, state, action)
 └── fix_isaacsim_fastfinder.sh, list_envs.py
+tools/lerobot_export/  # intermediate folders -> LeRobot v2.1 (own uv project, lerobot 0.3.3)
 tests/                 # registration test
 ```
 
