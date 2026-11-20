@@ -167,7 +167,7 @@ def main():
                 f"[eval] slip causes ({int(slips.sum())}): settle > 15 mm {int((m[:, 0] > 0.015).sum())}, "
                 f"last 0.5 s > 0.5 mm {int((m[:, 1] > 0.0005).sum())}, rotation > 10 deg "
                 f"{int((m[:, 2] > math.radians(10)).sum())}, "
-                f"gripper tilt > 15 deg {int((m[:, 3] > math.radians(15)).sum())}"
+                f"gripper tilt > 10 deg {int((m[:, 3] > math.radians(10)).sum())}"
             )
         mm = 1000 * best_rel
         print(

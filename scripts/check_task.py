@@ -88,6 +88,7 @@ def main():
         "success",
         "failure",
         "drone_push",
+        "drone_slip",
     ):
         setattr(env_cfg.rewards, name, None)
     if args_cli.device is not None:

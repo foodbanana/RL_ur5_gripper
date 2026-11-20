@@ -273,3 +273,31 @@ class terminal_bonus(ManagerTermBase):
         for name in self._term_names:
             done |= env.termination_manager.get_term(name)
         return (done & ~env.termination_manager.time_outs).float() / env.step_dt
+
+
+class drone_slip(ManagerTermBase):
+    """Speed of the drone relative to the TCP beyond ``deadband`` while grasped or held [m/s], shape (N,).
+
+    From position changes (PhysX reports velocities of bodies in contact that do not move). Most remaining failures
+    were slips: the drone sliding slowly in the fingers after the motor stop. The arm holds still once grasped, so the
+    policy can only answer through where and how it grasps. The deadband leaves the first settling of the dropped
+    drone (a few mm) mostly uncharged.
+    """
+
+    def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self._prev = torch.zeros(env.num_envs, 3, device=env.device)
+        self._valid = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+
+    def reset(self, env_ids=None):
+        self._valid[_to_index(env_ids, self.device)] = False
+
+    def __call__(self, env: ManagerBasedRLEnv, deadband: float = 0.002) -> torch.Tensor:
+        judge = get_judge(env)
+        rel, _ = judge.drone_in_tcp()
+        holding = (judge.phase == GRASPED) | (judge.phase == KILLED)
+        speed = (rel - self._prev).norm(dim=-1) / env.step_dt
+        out = (speed - deadband).clamp(min=0.0) * (holding & self._valid)
+        self._prev = rel.clone()
+        self._valid = holding
+        return out

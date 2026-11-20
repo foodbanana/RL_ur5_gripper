@@ -5,7 +5,7 @@ Reinforcement-learning tasks for drone grasping, built as an installable
 
 > **Status:** the UR5 drone grasp task trains on PhysX. The current policy is a privileged teacher for VLA data:
 > on the flying drone (mid hover) with domain randomization it grasps and holds it upright (gripper tilt <= 10 deg)
-> in 93-95 % of episodes from the 25 reference starts, slows to about 14 cm/s before the grasp and holds the arm
+> in 93-96 % of episodes from the 25 reference starts, slows to about 14 cm/s before the grasp and holds the arm
 > still afterwards.
 
 Registered tasks:

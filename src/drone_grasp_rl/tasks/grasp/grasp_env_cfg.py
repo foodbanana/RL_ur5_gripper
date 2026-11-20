@@ -249,14 +249,17 @@ class RewardsCfg:
     arm_still = RewTerm(func=mdp.arm_motion_while_closing, weight=0.0, params={"gate": "grasp", "norm": "l1"})
     # within 10 cm of the grasp point: speed above 5 cm/s + 1/s x distance (slow down when close)
     approach_speed = RewTerm(func=mdp.approach_speed_excess, weight=0.0)
+    # drone sliding in the fingers while grasped, beyond 2 mm/s (the arm holds still then, so it shapes the grasp)
+    drone_slip = RewTerm(func=mdp.drone_slip, weight=-1000.0)
     # arm joint accelerations (abrupt starts and stops)
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=0.0, params={"asset_cfg": MISSING})
     # both finger sides on the drone, until the motor stop [about 2 per second, at most about 1.5 s]
     finger_contact = RewTerm(func=mdp.finger_contact, weight=2.0)
     # commanding close at the waist, before the grasp [about 2 per second for the ~0.5 s until contact]
     # (an empty_close penalty for closing far away taught the policy never to close; the judge still counts it)
-    # only within 6 mm: with 15 mm the policy closed while still rising, squeezed the drone and tilted the gripper
-    close_near = RewTerm(func=mdp.close_near, weight=2.0, params={"max_distance": 0.006})
+    # only within 4 mm (6 mm before the slip term): with 15 mm the policy closed while still rising, squeezed the
+    # drone and tilted the gripper
+    close_near = RewTerm(func=mdp.close_near, weight=2.0, params={"max_distance": 0.004})
     # still holding after the motor stop [4 per second, 2.5 s = 10]
     hold = RewTerm(func=mdp.hold, weight=4.0)
     # judge says held [+20 once]; any failure termination [-5 once]
