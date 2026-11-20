@@ -1,0 +1,11 @@
+[project]
+name = "drone-grasp-lerobot-export"
+version = "0.1.0"
+description = "Intermediate episode folders -> LeRobot v2.1 data set (lerobot 0.3.3), kept apart from the Isaac Lab environment"
+requires-python = "==3.10.*"
+dependencies = [
+    "lerobot==0.3.3",
+]
+
+[tool.uv]
+package = false

@@ -162,3 +162,29 @@ class UR5GraspEnvCfg(grasp.GraspEnvCfg):
             left_sensors=[s for s in FINGER_CONTACT_SENSORS if s.startswith("l")],
             gripper_joint=GRIPPER_JOINT_NAME,
         )
+
+
+@configclass
+class UR5GraspRecordEnvCfg(UR5GraspEnvCfg):
+    """Drone grasp with the wrist camera, for recording VLA demonstrations with a trained teacher.
+
+    Same task, observations and actions as :class:`UR5GraspEnvCfg` (the teacher checkpoint loads unchanged); the
+    camera is a scene sensor read by ``scripts/record_demos.py``, not a policy input. Starts from the 25 reference
+    positions only (no near-start curriculum), physics randomization on as in training.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        from .camera import wrist_camera_cfg
+        from .visuals import ceiling_cfg, key_light_cfg
+
+        self.scene.wrist_cam = wrist_camera_cfg()
+        # backdrop and shadows for the camera; randomized between recording rounds (visuals.randomize_visuals)
+        self.scene.ceiling = ceiling_cfg()
+        self.scene.key_light = key_light_cfg()
+        self.scene.num_envs = 16
+        # visual randomization edits per-environment USD prims; replicated environments are clones the renderer does
+        # not read back from USD (a changed ceiling color did not show), as Isaac Lab's visual color terms also require
+        self.scene.replicate_physics = False
+        self.events.reset_drone.params["near_fraction"] = 0.0
+        self.curriculum = None

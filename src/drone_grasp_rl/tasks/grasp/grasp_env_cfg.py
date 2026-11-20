@@ -113,7 +113,7 @@ class GraspSceneCfg(InteractiveSceneCfg):
 
     ground = AssetBaseCfg(prim_path="/World/ground", spawn=sim_utils.GroundPlaneCfg())
 
-    # The wrist and third-view cameras need light also when headless.
+    # The wrist camera needs light also when headless.
     dome_light = AssetBaseCfg(prim_path="/World/DomeLight", spawn=sim_utils.DomeLightCfg(intensity=1000.0))
 
     def __post_init__(self):
