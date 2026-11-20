@@ -150,6 +150,8 @@ hover static 10% / small 30% / mid 40% / big 20%, 실물 데이터와 같은 스
 
 | 2-5 본 녹화 | 선생 `try20b`, 16 env, seed 1: **300개, 50,830 프레임 (평균 6.8 s)**, 534 s (20 라운드). 녹화한 312개 중 성공 300 (96%). hover static 36 / small 93 / mid 117 / big 54. 중간 파일 9.4 GB → LeRobot v2.1 **192 MB**, 검수 5/5 PASS (`datasets/lerobot_v21/local/teacher20b_vdr_300`) |
 
+| depth (추가) | `record_demos.py --depth`: 같은 손목 카메라의 `distance_to_image_plane` → 실물 D435i처럼 만든 depth (`camera.realsense_depth_mm`): 0.14 m보다 가깝거나 10 m보다 멀면 0, 깊이에 따른 잡음(1 m에서 4.7 mm), 물체 경계 구멍, 1 mm 단위. 중간 파일 `wrist_depth/*.png` (16비트 mm). LeRobot은 `--with-depth`일 때만 `depth/chunk-*/episode_*.npz` (uint16, 에피소드별)와 `meta/depth_info.json` 추가 — lerobot 0.3.3이 1채널 16비트 영상을 저장하지 못하기 때문. 기본 스키마는 RGB만 그대로 |
+
 알게 된 점
 - Isaac Lab `PinholeCameraCfg.from_intrinsic_matrix`는 주점 오프셋(cx, cy)을 버린다 → 기존 레포 식으로 직접 계산
 - `replicate_physics=True`이면 env별 USD를 바꿔도 렌더러에 안 보인다 → 녹화 장면은 `False`
@@ -161,6 +163,8 @@ hover static 10% / small 30% / mid 40% / big 20%, 실물 데이터와 같은 스
 # 손목 카메라 확인 (outputs/wrist_camera/에 영상)
 uv run --extra isaacsim python scripts/check_wrist_camera.py
 uv run --extra isaacsim python scripts/check_wrist_camera.py --visual_dr --out outputs/wrist_camera_vdr
+uv run --extra isaacsim python scripts/check_wrist_camera.py --depth --out outputs/wrist_camera_depth
+# depth까지: record_demos.py에 --depth, 병합에 --with-depth
 # 녹화 (datasets/intermediate/<이름>/)
 uv run --extra isaacsim python scripts/record_demos.py \
     --checkpoint logs/rsl_rl/drone_grasp_ur5/<try20b 폴더>/model_17097.pt --num_episodes 300 --num_envs 16 --seed 1 --name <이름>
@@ -173,6 +177,7 @@ uv run --project tools/lerobot_export python tools/lerobot_export/inspect_datase
 
 남은 것
 - 시각 다양성: 지금은 단색 천장과 조명뿐. 실험실 천장 사진 텍스처, NuRec 배경, 카메라 노출·화이트밸런스 변화
-- depth 저장 여부 (8장 6번)
+- depth: 잡기 직전(드론이 카메라에서 0.14 m 안)에는 실물처럼 depth가 비어 있다. 실물에서도 쓰려면 RealSense에서
+  depth 640x480 + `align_depth`를 켜고 녹화해야 한다 (기존 실물 녹화는 color만)
 - Stewart·Husky 베이스 변형에서의 녹화 (`base_imu`가 상수가 아님)
 - VLA 학습 스모크 테스트 (2-6)

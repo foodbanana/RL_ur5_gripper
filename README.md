@@ -102,7 +102,9 @@ uv run --project tools/lerobot_export python tools/lerobot_export/inspect_datase
     datasets/lerobot_v21/local/<name> --load
 ```
 
-`datasets/` is git-ignored.
+Add `--depth` to `record_demos.py` and `--with-depth` to the merge to keep a real-like D435i depth (16-bit mm,
+0 = no reading) next to the data set in `depth/chunk-*/episode_*.npz`; lerobot 0.3.3 cannot store 16-bit
+single-channel images, and without the flag the schema stays RGB only. `datasets/` is git-ignored.
 
 Use `physics=<PRESET>` to select any preset listed by `isaaclab list_envs --show_presets`. To use other optional
 features (`rerun`, `wandb`, `skrl`, ...), pass the matching extra from `pyproject.toml`, for example

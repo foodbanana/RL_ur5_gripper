@@ -76,6 +76,8 @@ def main():
                     help='앞 / 뒤 / 양쪽 정지 구간을 자른다 (기본 안 자름)')
     ap.add_argument('--trim-margin', type=float, default=0.5, help='[s] 자를 때 남길 정지 구간 (기본 0.5)')
     ap.add_argument('--idle-eps-deg', type=float, default=0.1, help='[deg] 팔 명령이 이만큼 안 변하면 정지 (기본 0.1)')
+    ap.add_argument('--with-depth', action='store_true',
+                    help='중간 파일의 depth (wrist_depth/) 를 depth/chunk-*/episode_*.npz 로 같이 저장 (기본: RGB 만, 실물 데이터셋과 같은 스키마)')
     args = ap.parse_args()
 
     # ── v2.1 형식 확인 ──
@@ -124,6 +126,9 @@ def main():
             print("       조용한 fallback 없음. 문제를 고치거나 매니페스트에서 제외 후 다시 실행.")
             sys.exit(1)
         ref = ref or {k: info[k] for k in ('fps', 'hwc', 'arm_action', 'base_imu')}
+        if args.with_depth and not info['depth_keys']:
+            print(f"[중단] {name}: --with-depth 인데 depth 가 없음 (record_demos.py --depth 로 녹화)")
+            sys.exit(1)
         lead, trail = common.idle_frames(info['data']['actions'], info['data']['states'], eps)
         info['idle'] = (lead, trail)
         note = f"프레임 {info['N']}, 정지 앞 {lead} / 뒤 {trail} 프레임, " \
@@ -174,6 +179,8 @@ def main():
         start, end = info['range']
         print(f"[{ep_idx}] {info['name']}  (프레임 {end - start}" + (f", 원래 {info['N']} 중 {start}~{end}" if (start, end) != (0, info['N']) else "") + ")")
         common.add_episode(dataset, info, args.task, start, end)
+        if args.with_depth:
+            print(f"    depth 저장: {common.write_depth(root, info, ep_idx, start, end)}")
         manifest_record.append({
             'episode_index': ep_idx, 'source': info['name'], 'frames': end - start, 'source_frames': info['N'],
             'frame_range': [start, end], 'idle_frames': {'start': info['idle'][0], 'end': info['idle'][1]},
@@ -189,6 +196,7 @@ def main():
         'fps': fps,
         'arm_action': ref['arm_action'], 'base_imu': ref['base_imu'],
         'trim_idle': args.trim_idle, 'trim_margin_s': args.trim_margin, 'idle_eps_deg': args.idle_eps_deg,
+        'with_depth': args.with_depth,
         'total_episodes': len(infos),
         'total_frames': total_frames,
         'episodes': manifest_record,
@@ -196,6 +204,12 @@ def main():
     }
     meta_dir = os.path.join(root, 'meta')
     os.makedirs(meta_dir, exist_ok=True)
+    if args.with_depth:
+        with open(os.path.join(meta_dir, 'depth_info.json'), 'w') as f:
+            json.dump({'path': common.DEPTH_PATH, 'keys': infos[0]['depth_keys'], 'dtype': 'uint16', 'unit': 'mm',
+                       'shape': [None, info['hwc'][0], info['hwc'][1]], 'invalid': 0,
+                       'frames': 'same order and count as the episode parquet (frame_index)',
+                       'model': infos[0]['depth_meta']}, f, indent=2, ensure_ascii=False)
     with open(os.path.join(meta_dir, 'merge_manifest.json'), 'w') as f:
         json.dump(rec, f, indent=2, ensure_ascii=False)
 

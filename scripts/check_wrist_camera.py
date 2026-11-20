@@ -7,8 +7,10 @@ open for a few steps, then saves each environment's wrist image with markers dra
   image, so the mount and the intrinsics agree when the red mark sits there, between the fingertips
 - green: the drone body origin
 
-and prints both pixel positions. With ``--checkpoint`` the teacher policy runs instead and images are saved every
-``--every`` steps until the first episode ends (a strip through approach, grasp and hold).
+and prints both pixel positions. With ``--depth`` it also saves the real-like D435i depth (``*_depth.png``, gray
+0.1-3 m, black = no reading) and compares the depth at the drone's pixel with its true distance. With ``--checkpoint``
+the teacher policy runs instead and images are saved every ``--every`` steps until the first episode ends (a strip
+through approach, grasp and hold).
 
 Usage (from the repository root):
 
@@ -23,6 +25,7 @@ import os
 import sys
 
 import gymnasium as gym
+import numpy as np
 import torch
 
 from isaaclab.app import add_launcher_args, launch_simulation
@@ -41,6 +44,7 @@ parser.add_argument("--every", type=int, default=15, help="With --checkpoint: sa
 parser.add_argument("--out", type=str, default="outputs/wrist_camera", help="Output folder for the PNG images.")
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--visual_dr", action="store_true", help="Apply one visual randomization before the images.")
+parser.add_argument("--depth", action="store_true", help="Also save the real-like depth (color map) and check it.")
 add_launcher_args(parser)
 parser.set_defaults(device=None)
 args_cli, hydra_args = setup_preset_cli(parser, sys.argv[1:])
@@ -56,6 +60,10 @@ def project(points_w, cam_pos_w, cam_quat_w_ros, intrinsics):
     u = intrinsics["fx"] * p[:, 0] / p[:, 2] + intrinsics["cx"]
     v = intrinsics["fy"] * p[:, 1] / p[:, 2] + intrinsics["cy"]
     return torch.stack([u, v, p[:, 2]], dim=-1)
+
+
+def marks_for(i, uv_tcp, uv_drone):
+    return [(uv_tcp[i].tolist(), (255, 0, 0)), (uv_drone[i].tolist(), (0, 255, 0))]
 
 
 def save(img, marks, path):
@@ -76,6 +84,8 @@ def main():
     env_cfg, agent_cfg = resolve_task_config(TASK, "rsl_rl_cfg_entry_point")
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.scene.wrist_cam.update_latest_camera_pose = True  # the camera moves with the wrist
+    if args_cli.depth:
+        env_cfg.scene.wrist_cam.data_types = ["rgb", "distance_to_image_plane"]
     env_cfg.seed = args_cli.seed
     if args_cli.checkpoint is None:
         env_cfg.disable_randomization()
@@ -136,6 +146,28 @@ def main():
             for i in range(base.num_envs):
                 marks = [(uv_tcp[i].tolist(), (255, 0, 0)), (uv_drone[i].tolist(), (0, 255, 0))]
                 save(rgb[i], marks, os.path.join(args_cli.out, f"env{i}_{tag}.png"))
+            if args_cli.depth:
+                from drone_grasp_rl.tasks.grasp.config.ur5.camera import realsense_depth_mm
+
+                raw = cam.data.output["distance_to_image_plane"]
+                raw = getattr(raw, "torch", raw)
+                mm = realsense_depth_mm(raw).cpu().numpy()
+                z = raw.squeeze(-1).cpu().numpy()
+                for i in range(base.num_envs):
+                    # gray = 0.1-3 m (near is bright), black = no reading
+                    vis = np.where(mm[i] > 0, 255 - np.clip((mm[i] - 100) / 2900 * 230, 0, 230), 0).astype(np.uint8)
+                    save(
+                        np.stack([vis] * 3, -1),
+                        marks_for(i, uv_tcp, uv_drone),
+                        os.path.join(args_cli.out, f"env{i}_{tag}_depth.png"),
+                    )
+                u, v = int(round(float(uv_drone[0, 0]))), int(round(float(uv_drone[0, 1])))
+                inside = 0 <= u < mm.shape[2] and 0 <= v < mm.shape[1]
+                print(
+                    f"[camera] {tag}: depth zero (no reading) {100 * (mm[0] == 0).mean():.1f}% of pixels (env 0); "
+                    f"drone center depth along the optical axis {uv_drone[0, 2]:.3f} m"
+                    + (f", rendered there {z[0, v, u]:.3f} m, real-like {mm[0, v, u]} mm" if inside else " (off image)")
+                )
             top = rgb[:, :60].reshape(base.num_envs, -1).mean(axis=1)
             print(f"[camera] {tag}: mean value of the top 60 rows per env {[round(float(x)) for x in top]}")
             print(

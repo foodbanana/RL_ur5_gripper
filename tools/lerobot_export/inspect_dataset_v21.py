@@ -105,6 +105,23 @@ def main():
                      '없음' if gmax is None else f"{gmax:.3f}", '있음' if grasp else '없음', f"{lead / FPS:.2f} / {trail / FPS:.2f}",
                      '-' if not jc else f"{jc['interval_median_ms']:.1f} / {jc['interval_max_ms']:.1f} / {over}"))
     item('3 값 범위 (이상치 0)', not bad_values, '유한값, 팔 ±2π, 그리퍼 state 0~1, 그리퍼 action {0.0, 1.0}' if not bad_values else '; '.join(bad_values))
+    dinfo_path = os.path.join(root, 'meta', 'depth_info.json')
+    if os.path.isfile(dinfo_path):
+        dinfo = json.load(open(dinfo_path))
+        bad = []
+        for p, df in zip(parquets, dfs):
+            ep = int(df['episode_index'].iloc[0])
+            dp = os.path.join(root, dinfo['path'].format(episode_chunk=ep // info.get('chunks_size', 1000), episode_index=ep))
+            if not os.path.isfile(dp):
+                bad.append(f"{ep}: 파일 없음")
+                continue
+            with np.load(dp) as z:
+                for k in dinfo['keys']:
+                    a = z[k]
+                    if a.dtype != np.uint16 or a.shape != (len(df), *dinfo['shape'][1:]):
+                        bad.append(f"{ep}/{k}: {a.dtype} {a.shape}")
+        item('depth (별도 npz)', not bad, f"에피소드 {len(parquets)}개 모두 {dinfo['keys']} uint16 {dinfo['shape'][1:]}, 프레임 수 = parquet"
+             if not bad else '; '.join(bad[:5]))
     item('4 파지 신호', not no_grasp and bool(rows), f"모든 에피소드에서 닫기 명령 중 그리퍼 state 최댓값 < {common.GRASP_STATE_MAX}"
          if not no_grasp else f"파지 신호 없는 에피소드 {no_grasp} (닫기 명령이 없거나 끝까지 닫힘 = 빈손)")
 

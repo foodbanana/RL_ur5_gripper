@@ -99,6 +99,12 @@ def check_episode(name, in_dir, ref=None):
         if n_png != N:
             raise ValueError(f"{cam}/ png 개수({n_png}) != 프레임 수({N})")
     hwc = tuple(read_png(os.path.join(in_dir, IMAGE_KEYS[0], '000000.png')).shape)
+    depth_keys = list(meta.get('depth_keys', []))
+    for key in depth_keys:
+        d_dir = os.path.join(in_dir, key)
+        n_png = len([p for p in os.listdir(d_dir) if p.endswith('.png')]) if os.path.isdir(d_dir) else 0
+        if n_png != N:
+            raise ValueError(f"{key}/ png 개수({n_png}) != 프레임 수({N})")
 
     if np.abs(states[:, :6]).max() > ARM_LIMIT or np.abs(actions[:, :6]).max() > ARM_LIMIT:
         raise ValueError(f"팔 관절각이 ±2π 밖 (state 최대 {np.abs(states[:, :6]).max():.3f}, action 최대 {np.abs(actions[:, :6]).max():.3f} rad)")
@@ -118,7 +124,7 @@ def check_episode(name, in_dir, ref=None):
 
     close = ga == 1.0
     ps = meta.get('protective_stop')
-    return dict(name=name, dir=in_dir, N=N, **cur, mode=meta['mode'],
+    return dict(name=name, dir=in_dir, N=N, **cur, mode=meta['mode'], depth_keys=depth_keys, depth_meta=meta.get('depth', {}),
                 state_names=meta['state_names'], action_names=meta['action_names'],
                 grip_state_range=(float(gs.min()), float(gs.max())),
                 close_frames=int(close.sum()), grip_state_max_while_closing=float(gs[close].max()) if close.any() else None,
@@ -126,6 +132,32 @@ def check_episode(name, in_dir, ref=None):
                 protective_stop=bool(ps and ps.get('occurred')),
                 joint_command=meta.get('joint_command'), drone_kill=meta.get('drone_kill'),
                 data=d)
+
+
+DEPTH_PATH = 'depth/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.npz'
+# lerobot 0.3.3 는 1 채널 16 비트 영상을 저장하지 못한다 (image_writer: 3 채널 uint8 만, 비디오는 손실 압축).
+# 그래서 depth 는 데이터셋 폴더 안에 에피소드별 npz (키 = depth 이름, (T, H, W) uint16 mm, 0 = 측정 없음) 로 따로 둔다.
+# 프레임 순서는 parquet 의 frame_index 와 같다. 설명은 meta/depth_info.json.
+
+
+def read_depth_png(path):
+    """16 비트 depth png → (H, W) uint16 [mm]"""
+    arr = np.asarray(Image.open(path))
+    if arr.dtype != np.uint16 or arr.ndim != 2:
+        raise ValueError(f"depth png 가 16 비트 1 채널이 아님: {path} ({arr.dtype}, {arr.shape})")
+    return arr
+
+
+def write_depth(root, info, episode_index, start=0, end=None, chunks_size=1000):
+    """에피소드의 depth 프레임 [start, end) 를 DEPTH_PATH 에 저장. → 경로 (데이터셋 폴더 기준)"""
+    end = info['N'] if end is None else end
+    rel = DEPTH_PATH.format(episode_chunk=episode_index // chunks_size, episode_index=episode_index)
+    path = os.path.join(root, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    arrays = {k: np.stack([read_depth_png(os.path.join(info['dir'], k, f'{i:06d}.png')) for i in range(start, end)])
+              for k in info['depth_keys']}
+    np.savez_compressed(path, **arrays)
+    return rel
 
 
 def make_features(info):

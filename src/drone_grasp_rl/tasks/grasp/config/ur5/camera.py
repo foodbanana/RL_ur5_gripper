@@ -65,3 +65,48 @@ def wrist_camera_cfg(data_types: list[str] | None = None) -> CameraCfg:
         width=WRIST_CAMERA_WIDTH,
         height=WRIST_CAMERA_HEIGHT,
     )
+
+
+# --- depth (D435i depth stream aligned to the color image) ---
+# The real recordings had depth off (launch/cameras.launch.py: color only). To record it on the robot, enable the depth
+# stream at 640x480 and align it to color (aligned_depth_to_color), so it matches the simulated depth pixel for pixel.
+# The simulated depth is the camera's ``distance_to_image_plane`` (z in the optical frame, like RealSense depth), made
+# real-like by :func:`realsense_depth_mm`.
+
+DEPTH_BASELINE = 0.050
+"""[m] D435i stereo baseline."""
+DEPTH_FOCAL_PX = 337.0
+"""Focal length of the 640x480 depth stream [px]: 87 deg horizontal field of view."""
+DEPTH_MIN = 0.14
+"""[m] Closest measurable depth at 640x480: focal x baseline / 126 disparities (= 0.134 m), rounded up. Closer pixels
+read 0, as on the real camera; at the grasp the drone is about 0.11 m from the camera, so its depth is missing there."""
+DEPTH_MAX = 10.0
+"""[m] Farther pixels (and pixels that hit nothing) read 0."""
+DEPTH_SUBPIXEL = 0.08
+"""RMS disparity error [px]: depth noise std = subpixel x z^2 / (focal x baseline) (4.7 mm at 1 m)."""
+DEPTH_EDGE_JUMP = 0.05
+"""Pixels next to a depth jump larger than this fraction of their depth read 0 (stereo misses at object edges)."""
+
+
+def realsense_depth_mm(depth_m, generator=None):
+    """Real-like D435i depth from simulated depth [m] (N, H, W) or (N, H, W, 1) -> millimeters (N, H, W), int32.
+
+    Out of range (closer than :data:`DEPTH_MIN`, farther than :data:`DEPTH_MAX`, no hit) and edge pixels read 0, the
+    rest gets depth-dependent noise and 1 mm steps, like the camera's ``Z16`` format (save as uint16).
+    """
+    import torch
+
+    z = depth_m.squeeze(-1) if depth_m.dim() == 4 else depth_m
+    z = torch.nan_to_num(z.float(), nan=0.0, posinf=0.0, neginf=0.0)
+    valid = (z >= DEPTH_MIN) & (z <= DEPTH_MAX)
+    # edges: a neighbor (4-connected) differs by more than the jump fraction
+    pad = torch.nn.functional.pad(z.unsqueeze(1), (1, 1, 1, 1), mode="replicate").squeeze(1)
+    jump = torch.zeros_like(z, dtype=torch.bool)
+    for dy, dx in ((0, 1), (2, 1), (1, 0), (1, 2)):
+        nb = pad[:, dy : dy + z.shape[1], dx : dx + z.shape[2]]
+        jump |= (nb - z).abs() > DEPTH_EDGE_JUMP * z
+    valid &= ~jump
+    sigma = DEPTH_SUBPIXEL * z * z / (DEPTH_FOCAL_PX * DEPTH_BASELINE)
+    noisy = z + sigma * torch.randn(z.shape, device=z.device, generator=generator)
+    mm = torch.where(valid, (noisy * 1000.0).round(), torch.zeros_like(z)).clamp(0, 65535)
+    return mm.to(torch.int32)

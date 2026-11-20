@@ -9,6 +9,7 @@ the same as ``lerobot_stage1_extract_bag.py`` makes from a ROS bag):
                     base_imu.npy (T, 6) fixed base: [0, 0, 0, 0, 0, 9.81]
                     timestamps.npy (T,) k / 25 s
                     wrist/000000.png    640x480 RGB
+                    wrist_depth/000000.png  with --depth: 16-bit, mm, 0 = no reading (real-like D435i, camera.py)
                     meta.json
 
 ``tools/lerobot_export`` turns the folders into a LeRobot v2.1 data set (one camera, ``observation.images.wrist``).
@@ -84,6 +85,7 @@ parser.add_argument("--name", type=str, default=None, help="Recording name (fold
 parser.add_argument("--out_root", type=str, default="datasets/intermediate")
 parser.add_argument("--hover", type=str, default="static:0.1,small:0.3,mid:0.4,big:0.2", help="Hover preset weights.")
 parser.add_argument("--no_dr", action="store_true", help="Record without the physics randomization.")
+parser.add_argument("--depth", action="store_true", help="Also record the real-like D435i depth (wrist_depth/).")
 parser.add_argument(
     "--no_visual_dr", action="store_true", help="Keep the default look (no light/ceiling/table changes)."
 )
@@ -120,6 +122,8 @@ def main():
     env_cfg, agent_cfg = resolve_task_config(TASK, "rsl_rl_cfg_entry_point")
     agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, check_rsl_rl_version())
     env_cfg.scene.num_envs = args_cli.num_envs
+    if args_cli.depth:
+        env_cfg.scene.wrist_cam.data_types = ["rgb", "distance_to_image_plane"]
     weights = {k: float(v) for k, v in (item.split(":") for item in args_cli.hover.split(","))}
     env_cfg.actions.drone_hover.preset_weights = weights
     if args_cli.no_dr:
@@ -177,7 +181,14 @@ def main():
             state = torch.cat([q[:, arm_ids], (q[:, grip_id : grip_id + 1] / GRIPPER_CLOSED_POS).clamp(0, 1)], dim=-1)
             rgb = cam.data.output["rgb"]
             rgb = getattr(rgb, "torch", rgb)[..., :3]
-            return state.cpu().numpy(), rgb.cpu().numpy()
+            depth = None
+            if args_cli.depth:
+                raw = cam.data.output["distance_to_image_plane"]
+                depth = camera.realsense_depth_mm(getattr(raw, "torch", raw), depth_gen).cpu().numpy().astype(np.uint16)
+            return state.cpu().numpy(), rgb.cpu().numpy(), depth
+
+        depth_gen = torch.Generator(device=base.device)
+        depth_gen.manual_seed(args_cli.seed)
 
         def episode_info(i):
             return {
@@ -195,6 +206,8 @@ def main():
             ep_name = f"{name}_ep{idx:04d}"
             ep_dir = os.path.join(out_dir, ep_name)
             os.makedirs(os.path.join(ep_dir, "wrist"), exist_ok=True)
+            if args_cli.depth:
+                os.makedirs(os.path.join(ep_dir, "wrist_depth"), exist_ok=True)
             states = np.stack([buf["states"][k] for k in frames]).astype(np.float32)
             actions = np.stack([buf["actions"][k] for k in frames]).astype(np.float32)
             np.save(os.path.join(ep_dir, "states.npy"), states)
@@ -209,6 +222,14 @@ def main():
                         os.path.join(ep_dir, "wrist", f"{j:06d}.png"),
                     )
                 )
+                if args_cli.depth:  # 16-bit PNG, millimeters, 0 = no reading
+                    jobs.append(
+                        writer.submit(
+                            lambda img, p: Image.fromarray(img).save(p, compress_level=3),
+                            buf["depth"][k],
+                            os.path.join(ep_dir, "wrist_depth", f"{j:06d}.png"),
+                        )
+                    )
             kill = []
             if buf["kill_step"] is not None:
                 t = buf["kill_step"] * dt
@@ -232,6 +253,22 @@ def main():
                 "base_imu": "const",
                 "base_imu_names": ["gyro_x", "gyro_y", "gyro_z", "accel_x", "accel_y", "accel_z"],
                 "image_keys": ["wrist"],
+                "depth_keys": ["wrist_depth"] if args_cli.depth else [],
+                "depth": (
+                    {
+                        "wrist_depth": {
+                            "format": "16-bit PNG, millimeters along the optical axis, 0 = no reading",
+                            "aligned_to": "wrist",
+                            "model": "drone_grasp_rl.tasks.grasp.config.ur5.camera.realsense_depth_mm",
+                            "min_m": camera.DEPTH_MIN,
+                            "max_m": camera.DEPTH_MAX,
+                            "subpixel_px": camera.DEPTH_SUBPIXEL,
+                            "edge_jump": camera.DEPTH_EDGE_JUMP,
+                        }
+                    }
+                    if args_cli.depth
+                    else {}
+                ),
                 "image_size": [camera.WRIST_CAMERA_HEIGHT, camera.WRIST_CAMERA_WIDTH, 3],
                 "cameras": {
                     "wrist": {
@@ -283,7 +320,7 @@ def main():
                     grip_cmd = sent["grip"].float().cpu().numpy()
                     killed = (judge.phase == KILLED).cpu().numpy()
                     done = dones.bool().cpu().numpy()
-                    states, images = observe()
+                    states, images, depths = observe()
                     for i in range(n):
                         if not active[i]:
                             continue
@@ -293,12 +330,14 @@ def main():
                                     "states": [],
                                     "actions": [],
                                     "images": [],
+                                    "depth": [],
                                     "kill_step": None,
                                     "info": info_now[i],
                                 }
                             buf = buffers[i]
                             buf["states"].append(pending[i][0])
                             buf["images"].append(pending[i][1])
+                            buf["depth"].append(pending[i][2])
                             buf["actions"].append(np.concatenate([arm_cmd[i], grip_cmd[i : i + 1]]))
                             if buf["kill_step"] is None and killed[i]:
                                 buf["kill_step"] = len(buf["states"])
@@ -315,7 +354,7 @@ def main():
                                 saved += 1
                             buffers[i] = None
                         else:
-                            pending[i] = (states[i], images[i])
+                            pending[i] = (states[i], images[i], None if depths is None else depths[i])
                 print(f"[record] round {rounds}: saved {saved}/{args_cli.num_episodes}, outcomes {dict(outcomes)}")
         for job in jobs:
             job.result()
