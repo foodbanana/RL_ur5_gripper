@@ -13,7 +13,7 @@ masses, recomputed inertia, locked rotor joints and zeroed initial velocities.
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
-from isaaclab_newton.sim.schemas import NewtonArticulationCfg
+from isaaclab_newton.sim.schemas import MujocoCollisionCfg, NewtonArticulationCfg
 from isaaclab_physx.sim.schemas import PhysxArticulationCfg
 
 from . import DRONE_GRASP_RL_ASSETS_DIR
@@ -45,11 +45,22 @@ MAX_ROTOR_VELOCITY = 1100.0
 LINEAR_DRAG = (0.50, 0.30, 0.0)
 """Body-frame linear drag coefficients [N·s/m]."""
 
+NEWTON_DRONE_CONTACT = MujocoCollisionCfg(
+    condim=4, solref=(0.005, 1.0), solimp=(0.95, 0.99, 0.001, 0.5, 2.0), priority=1
+)
+"""Stiffer MuJoCo contacts on the drone colliders (Newton only; PhysX ignores ``mjc:*``).
+
+MuJoCo's default (time constant 0.02 s, impedance 0.9-0.95) let the gripper's ~25 N squeeze push the fingers about
+1 cm into the drone: the gripper closed to 28 deg on a floating drone (PhysX: 16 deg) and to 63 deg on a hovering
+one, past the judge's empty-close angle, so no grasp was ever detected. ``priority`` makes these values win for every
+contact of the drone (finger, table)."""
+
 IRIS_CFG = ArticulationCfg(
     prim_path="{ENV_REGEX_NS}/Drone",
     spawn=sim_utils.UsdFileCfg(
         usd_path=str(IRIS_USD_PATH),
         activate_contact_sensors=True,
+        collision_props=[NEWTON_DRONE_CONTACT],
         articulation_props=[
             # Stay awake while hovering; a sleeping articulation stops reacting to small wrenches.
             PhysxArticulationCfg(sleep_threshold=0.0),

@@ -9,9 +9,16 @@ The layer disables collision on the original body mesh (it stays visible) and ad
 hull pieces with the same local transform. ``iris_0p75_newton.usda`` sublayers it. Pieces below
 ``--min_volume`` are dropped.
 
+The layer also binds a physics material to the pieces (Newton only, like the layer): friction 1.0 (Newton's default,
+unchanged) and torsional friction ``--torsional`` [m]. MuJoCo makes one contact point per finger-hull pair, so the
+two fingers alone could not stop the dropped drone from pivoting about the line between them; with torsional
+friction (and ``condim`` 4 on the drone colliders, ``assets/drones.py``) it holds like on PhysX.
+``--material_only`` rewrites only that material in the existing layer (no new decomposition).
+
 Usage (from the repository root; no simulator needed):
 
     uv run python scripts/build_drone_collision.py
+    uv run python scripts/build_drone_collision.py --material_only --torsional 0.02
 """
 
 import argparse
@@ -35,6 +42,8 @@ parser.add_argument("--max_hulls", type=int, default=32, help="Maximum number of
 parser.add_argument("--max_hull_vertices", type=int, default=64, help="Maximum vertices per hull.")
 parser.add_argument("--min_volume", type=float, default=1e-7, help="Drop pieces below this volume [m^3, unscaled].")
 parser.add_argument("--seed", type=int, default=0)
+parser.add_argument("--torsional", type=float, default=0.02, help="Torsional friction of the pieces [m] (Newton).")
+parser.add_argument("--material_only", action="store_true", help="Only (re)write the contact material.")
 args = parser.parse_args()
 
 
@@ -47,7 +56,32 @@ def waist_width(mesh: trimesh.Trimesh) -> tuple[float, float] | None:
     return float(y.min()), float(y.max())
 
 
+MATERIAL = "/vehicle/body/newton_contact_material"
+
+
+def bind_contact_material(out: Usd.Stage) -> None:
+    """Physics material on every collision piece: friction 1.0, torsional friction ``--torsional``."""
+    from pxr import UsdShade
+
+    material = UsdShade.Material.Define(out, MATERIAL)
+    api = UsdPhysics.MaterialAPI.Apply(material.GetPrim())
+    api.CreateStaticFrictionAttr().Set(1.0)
+    api.CreateDynamicFrictionAttr().Set(1.0)
+    material.GetPrim().CreateAttribute("newton:torsionalFriction", Sdf.ValueTypeNames.Float).Set(args.torsional)
+    for prim in out.GetPrimAtPath("/vehicle/body").GetChildren():
+        if prim.GetName().startswith("collision_"):
+            UsdShade.MaterialBindingAPI.Apply(prim).Bind(
+                material, UsdShade.Tokens.weakerThanDescendants, materialPurpose="physics"
+            )
+    print(f"[collision] contact material: friction 1.0, torsional friction {args.torsional} m")
+
+
 def main():
+    if args.material_only:
+        out = Usd.Stage.Open(str(OUT_USD))
+        bind_contact_material(out)
+        out.GetRootLayer().Save()
+        return
     stage = Usd.Stage.Open(str(SOURCE_USD))
     usd_mesh = UsdGeom.Mesh(stage.GetPrimAtPath(BODY_MESH))
     points = np.array(usd_mesh.GetPointsAttr().Get(), dtype=np.float64)
@@ -109,6 +143,7 @@ def main():
         prim.AddTransformOp().Set(Gf.Matrix4d(local.tolist()))
         UsdPhysics.CollisionAPI.Apply(prim.GetPrim())
         UsdPhysics.MeshCollisionAPI.Apply(prim.GetPrim()).CreateApproximationAttr(UsdPhysics.Tokens.convexHull)
+    bind_contact_material(out)
     layer.Save()
     print(f"[collision] wrote {OUT_USD.relative_to(REPO_ROOT)} with {len(kept)} convex hull pieces")
 

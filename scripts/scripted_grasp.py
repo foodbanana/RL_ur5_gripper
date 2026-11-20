@@ -52,7 +52,7 @@ PRE, RISE, CLOSE = 0, 1, 2
 def main():
     import isaaclab.utils.math as math_utils
 
-    from drone_grasp_rl.assets.robots import ARM_JOINT_NAMES, TCP_BODY_NAME, TCP_OFFSET_POS
+    from drone_grasp_rl.assets.robots import ARM_JOINT_NAMES, GRIPPER_JOINT_NAME, TCP_BODY_NAME, TCP_OFFSET_POS
     from drone_grasp_rl.tasks.grasp.mdp import frame_pose_w
     from drone_grasp_rl.tasks.grasp.mdp.judge import FAIL_REASONS, HELD, get_judge
 
@@ -82,6 +82,10 @@ def main():
         judge = get_judge(env)
         reset_term = env.event_manager.get_term_cfg("reset_drone").func
         arm_ids = [robot.joint_names.index(j) for j in ARM_JOINT_NAMES]
+        # driven joint first, then its mimic followers (r2, l1, l2)
+        finger_joints = [robot.joint_names.index(GRIPPER_JOINT_NAME)] + [
+            i for i, name in enumerate(robot.joint_names) if name.startswith("rh_") and name != GRIPPER_JOINT_NAME
+        ]
         body = robot.body_names.index(TCP_BODY_NAME)
         jac_body = body - 1 if robot.is_fixed_base else body
         jac_cols = [j + robot.num_base_dofs for j in arm_ids]
@@ -101,6 +105,9 @@ def main():
         done_once = torch.zeros(n, dtype=torch.bool, device=dev)
         outcomes = [None] * n
         targets = reset_term.target_index.clone()
+        # closest the TCP came to its goal while rising (shows an arm that cannot reach the 1 mm close condition)
+        rise_min = torch.full((n,), float("inf"), device=dev)
+        state_names = {PRE: "PRE", RISE: "RISE", CLOSE: "CLOSE"}
 
         with torch.inference_mode():
             while not bool(done_once.all()):
@@ -115,6 +122,7 @@ def main():
                 dist = pos_err.norm(dim=-1)
                 state = torch.where((state == PRE) & (dist < 0.01), torch.full_like(state, RISE), state)
                 state = torch.where((state == RISE) & (dist < 0.001), torch.full_like(state, CLOSE), state)
+                rise_min = torch.where(state == RISE, torch.fmin(rise_min, dist), rise_min)
                 # at most 1 cm of TCP travel per step (0.3 m/s), 5 mm while rising to the waist
                 limit = torch.where(state == PRE, 0.01, 0.005).unsqueeze(-1)
                 pos_err = pos_err * (limit / dist.clamp(min=1e-6).unsqueeze(-1)).clamp(max=1.0)
@@ -140,6 +148,15 @@ def main():
                 action[:, :6] *= (state != CLOSE).unsqueeze(-1)
                 action[:, 6] = torch.where(state == CLOSE, -1.0, 1.0)
 
+                # gripper angle and finger forces before the step (a reset clears them), for the time-out report
+                right, left = judge.finger_forces()
+                fingers = torch.rad2deg(robot.data.joint_pos.torch[:, finger_joints])
+                last_grip = [
+                    "joints "
+                    + "/".join(f"{float(a):.1f}" for a in fingers[k])
+                    + f" deg, forces R {float(right[k]):.1f} / L {float(left[k]):.1f} N"
+                    for k in range(n)
+                ]
                 _, reward, _, _, _ = env.step(action)
                 returns += reward
                 steps += 1
@@ -152,6 +169,11 @@ def main():
                             if bool(env.termination_manager.get_term(k)[i])
                         ]
                         label = "held" if phase == HELD else FAIL_REASONS.get(reason, "+".join(fired) or "?")
+                        if label == "time_out":  # what the judge saw: no grasp detected
+                            label += (
+                                f" (ended in {state_names[int(state[i])]}, closest while rising "
+                                f"{1000 * float(rise_min[i]):.1f} mm, gripper {last_grip[i]})"
+                            )
                         if label in ("held", "slip"):
                             m = judge.hold_metrics[i]
                             label += (
@@ -165,6 +187,7 @@ def main():
                         )
                         done_once[i] = True
                     state[i] = PRE
+                    rise_min[i] = float("inf")
                     steps[i] = 0
                     returns[i] = 0.0
                     targets[i] = reset_term.target_index[i]

@@ -7,7 +7,7 @@ UR5 + ROBOTIS RH-P12-RN(A) 그리퍼가 공중에 떠 있는 Iris 드론의 몸�
 (2) 나중에 카메라 영상 기반 학생 정책으로 증류해 실물에 배포하는 본보기가 된다.
 숫자는 코드(`src/drone_grasp_rl/tasks/grasp/`)와 같고, 바꿀 때는 이 문서도 같이 고친다.
 
-- 기준 엔진: **PhysX** (기존 data collection 레포의 게인이 PhysX 기준). Newton(MJWarp)은 에셋·태스크 검사만 통과, 파지 학습은 아직
+- 기준 엔진: **PhysX** (기존 data collection 레포의 게인이 PhysX 기준). Newton(MJWarp)에서도 PhysX로 학습한 선생이 그대로 95~97% 성공 (9장 Newton 확인)
 - 주기: 물리 120 Hz, 정책 30 Hz (decimation 4), 에피소드 최대 12 s
 - 코드 위치
 
@@ -49,7 +49,7 @@ UR5 + ROBOTIS RH-P12-RN(A) 그리퍼가 공중에 떠 있는 Iris 드론의 몸�
 | 드론 | Iris 0.75배, 0.8 kg. 리셋마다 25곳 기준 위치 중 하나 ±3 cm (로봇 베이스 기준), 정지 상태 | `scene_drone.yaml` |
 | 드론 비행 | 기하 제어기(geometric controller)가 hover 목표를 따라감. 사인파 프리셋 static/small/mid/big. 모터 정지 뒤 추력 0 | 6-1장 |
 | 접촉 재질 | PhysX: 손가락·드론 정지 0.6 / 운동 0.5 (각각 ×0.7~1.3 랜덤화). Newton: 기본값 1.0 유지 | `drive_gains.yaml` |
-| 드론 충돌체 | PhysX: 원래 `convexDecomposition`. Newton: 미리 분해한 30조각 | `assets/data/drones/iris/README.md` |
+| 드론 충돌체 | PhysX: 원래 `convexDecomposition`. Newton: 미리 분해한 30조각 + 비틀림 마찰 0.02 m, condim 4, 단단한 접촉(solref 0.005) | `assets/data/drones/iris/README.md`, `physics.py` |
 
 **학습 커리큘럼 (초기 상태):** 학습 리셋의 50%는 드론을 **시작 TCP 바로 위 0~30 cm**(수직선 위, 옆 ±3 mm)에 놓는다.
 나머지 50%는 원래 25곳이다. `play`와 평가 스크립트는 커리큘럼 없이 25곳만 쓴다.
@@ -307,6 +307,32 @@ uv run --extra isaacsim isaaclab play --rl_library rsl_rl --task DroneGraspRl-Gr
 
 <br>
 
+## 8-1. Newton(MJWarp) 확인 (3단계)
+
+PhysX로 학습한 선생(`try20b`)을 Newton에서 그대로 돌렸다. 처음에는 128회 중 3회 성공, 스크립트 전문가는 0회.
+원인은 모두 MuJoCo 기본값이 25 N 두 손가락 파지에 너무 물렁했던 것이다.
+
+| 문제 | 측정 | 해결 |
+|---|---|---|
+| 그리퍼 mimic이 벌어짐 | 구동 관절은 `rh_r1` 하나. 힘을 받으면 네 관절이 42/32/81/72°로 벌어짐 (PhysX 16° 동일). 구동 관절이 거의 닫힌 것으로 보여 판정기가 "빈손 닫기"로 판단 | `mujoco` 변형 USD의 mimic 관절에 `MjcEqualityJointAPI` + `mjc:solref` 0.005 / `solimp` 0.95~0.99 (`scripts/convert_assets.py`의 `stiffen_gripper_mimic`) |
+| 접촉이 물렁함 | 기본 시간 상수 0.02 s | 드론 충돌체 `MujocoCollisionCfg(solref=(0.005, 1), solimp=(0.95, 0.99, ...), priority=1)` (`assets/drones.py`) |
+| 0.005 s를 쓸 수 없음 | MuJoCo는 시간 상수를 solver 스텝의 2배 이상으로 제한. 2 substep에서 0.01 s로는 5/16 | substep 2 → 4 (480 Hz) |
+| 모터 정지 후 드론이 손가락 사이에서 회전 | 11.7° (PhysX 1.6°). 손가락-조각 쌍마다 접촉점이 1개라 두 손가락을 잇는 선을 축으로 돎 | 드론 조각에 비틀림 마찰 0.02 m (`iris_collision.usda` 재질) + `condim` 4. `enable_multiccd`는 효과 없음 |
+
+결과 (원래 25곳, 256회, 랜덤화 켬. Newton은 마찰 랜덤화 없음)
+
+| 조건 | Newton | PhysX |
+|---|---|---|
+| mid, seed 1 | 248 (96.9%) | 246 (96.1%) |
+| mid, seed 2 | 244 (95.3%) | 239 (93.4%) |
+| big, seed 1 | 234 (91.4%) | 95.3% |
+| 스크립트 전문가 (static) | 16/16 | 16/16 |
+
+- 드론을 잡은 그리퍼 각도: Newton 18.5°, PhysX 16.2°
+- Newton은 substep 4라 물리 계산이 2배. Newton에서 학습할 일이 생기면 속도를 다시 잰다
+
+<br>
+
 ## 9. 검사 스크립트
 
 | 스크립트 | 확인 내용 |
@@ -322,6 +348,6 @@ uv run --extra isaacsim isaaclab play --rl_library rsl_rl --task DroneGraspRl-Gr
 
 - 잡기 직전 속도를 100 mm/s 이하로 (지금 약 144 mm/s)
 - 시범 녹화: 카메라(손목·외부), LeRobot v2.1 내보내기, 시각 랜덤화
-- Newton에서의 파지 학습 (접촉 조정 필요)
+- Newton에서 접촉력 범위·마찰 랜덤화 (지금은 PhysX에만 마찰 랜덤화)
 - 보호 정지의 150 N 접촉력 기준, 그리퍼 몸통–드론 접촉 벌점(`bad_contact`)
 - 카메라, LeRobot 데이터 내보내기, 스튜어트 플랫폼
