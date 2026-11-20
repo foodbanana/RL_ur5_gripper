@@ -63,8 +63,8 @@ def contact_material(asset_cfg: SceneEntityCfg):
 
     PhysX: 0.6 static / 0.5 dynamic friction, no restitution (``drive_gains.yaml``, finger links and object), each
     randomized by x0.7-1.3 per environment.
-    Newton keeps its default (friction 1.0): PhysX friction values do not carry over numerically, and with 0.6 the
-    closing fingers squeezed the floating drone out of the grasp.
+    Newton: around its default friction 1.0 (PhysX values do not carry over numerically; with 0.6 the closing fingers
+    squeezed the floating drone out of the grasp), also x0.7-1.3. Newton has one friction coefficient per shape.
     """
     return preset(
         default=EventTerm(
@@ -81,7 +81,17 @@ def contact_material(asset_cfg: SceneEntityCfg):
                 "make_consistent": True,
             },
         ),
-        newton_mjwarp=None,
+        newton_mjwarp=EventTerm(
+            func=mdp.randomize_rigid_body_material,
+            mode="startup",
+            params={
+                "asset_cfg": asset_cfg,
+                "static_friction_range": (0.7, 1.3),
+                "dynamic_friction_range": (0.7, 1.3),
+                "restitution_range": (0.0, 0.0),
+                "num_buckets": 64,
+            },
+        ),
     )
 
 
@@ -238,6 +248,8 @@ class RewardsCfg:
     approach_fine = RewTerm(func=mdp.approach_fine, weight=2.0)
     # gripper axes vs drone axes; a penalty since the start pose is already aligned [0 when aligned]
     misalign = RewTerm(func=mdp.misalignment, weight=-1.0)
+    # closing axis vs drone y, linear in the angle [rad] (curriculum sets the weight)
+    yaw_error = RewTerm(func=mdp.yaw_misalignment, weight=0.0)
     # gripper approach axis vs up, always (after the grasp the drone turns with the gripper, so misalign is blind)
     # -25: with -15 the randomized training let the end-of-hold tilt grow to a median 8-13 deg near the 15 deg limit
     gripper_tilt = RewTerm(func=mdp.gripper_tilt, weight=-25.0)
@@ -313,6 +325,10 @@ class CurriculumCfg:
         func=mdp.ramp_reward_weight,
         params={"term_name": "arm_still", "initial_weight": 0.0, "final_weight": -1.5, "num_steps": 24000},
     )
+    yaw_error = CurrTerm(
+        func=mdp.ramp_reward_weight,
+        params={"term_name": "yaw_error", "initial_weight": 0.0, "final_weight": 0.0, "num_steps": 24000},
+    )
 
 
 @configclass
@@ -351,8 +367,10 @@ class GraspEnvCfg(ManagerBasedRLEnvCfg):
             # a resolved config holds the event term itself; an unresolved one the per-backend preset
             term = getattr(term, "default", term)
             if term is not None and hasattr(term, "params"):
-                term.params["static_friction_range"] = (0.6, 0.6)
-                term.params["dynamic_friction_range"] = (0.5, 0.5)
+                # the center of the randomized range: PhysX 0.6 / 0.5, Newton 1.0
+                for key in ("static_friction_range", "dynamic_friction_range"):
+                    lo, hi = term.params[key]
+                    term.params[key] = ((lo + hi) / 2, (lo + hi) / 2)
 
     def play_mode(self):
         super().play_mode()

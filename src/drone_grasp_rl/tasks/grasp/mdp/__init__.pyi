@@ -52,6 +52,7 @@ __all__ = [
     "hold",
     "misalignment",
     "tcp_in_grasp_frame",
+    "yaw_misalignment",
     "terminal_bonus",
 ]
 
@@ -98,5 +99,6 @@ from .rewards import (
     misalignment,
     tcp_in_grasp_frame,
     terminal_bonus,
+    yaw_misalignment,
 )
 from .terminations import drone_knocked, protective_stop

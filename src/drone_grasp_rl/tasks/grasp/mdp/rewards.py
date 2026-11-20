@@ -153,6 +153,20 @@ def misalignment(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg = SceneEntit
     return (1.0 - z_dot) + (1.0 - y_dot.abs())
 
 
+def yaw_misalignment(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame")) -> torch.Tensor:
+    """Angle between the gripper's closing axis (TCP y) and the drone's y axis, either sign [rad], shape (N,).
+
+    ``misalignment`` has the same axis as ``1 - |cos|``, nearly flat for small errors (5.6 deg costs 0.005); this is
+    linear in the angle, so it still pulls when the error is small. Keeps the drone in the same orientation in the
+    wrist images of the demonstrations.
+    """
+    _, tcp_quat = frame_pose_w(env, "tcp", sensor_cfg)
+    _, drone_quat = frame_pose_w(env, "drone", sensor_cfg)
+    y_tcp = math_utils.matrix_from_quat(tcp_quat)[..., 1]
+    y_drone = math_utils.matrix_from_quat(drone_quat)[..., 1]
+    return torch.acos((y_tcp * y_drone).sum(dim=-1).abs().clamp(max=1.0))
+
+
 def gripper_tilt(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame")) -> torch.Tensor:
     """``1 - cos`` of the angle between the TCP z axis (approach axis) and the robot base +z axis (up), shape (N,).
 
