@@ -49,92 +49,15 @@ parser.add_argument(
     action="store_true",
     help="Also report where the drone is in the wrist camera's view during the approach (camera model only).",
 )
+parser.add_argument(
+    "--marker_obs",
+    action="store_true",
+    help="Also run the ArUco marker observation model and report its detection rate, age and errors by stage.",
+)
 add_launcher_args(parser)
 parser.set_defaults(device=None)
 args_cli, hydra_args = setup_preset_cli(parser, sys.argv[1:])
 sys.argv = [sys.argv[0]] + hydra_args
-
-
-MARKER_OFFSET = (0.0, 0.0, -0.045)
-"""Candidate marker position in the drone body frame [m]: center of the underside (body bottom at about -0.050 m)."""
-
-
-class WristCameraModel:
-    """Pose of the wrist camera from the gripper base body and a fixed offset read from the robot USD (no rendering).
-
-    The optical frame (ROS: +z forward, +y down) and the gripper base are rigidly linked; their relative transform is
-    taken once from environment 0's USD prims.
-    """
-
-    def __init__(self, env):
-        from pxr import UsdGeom
-
-        import isaaclab.sim as sim_utils
-
-        from drone_grasp_rl.assets.robots import BODY_PRIM_PATHS, TCP_BODY_NAME
-        from drone_grasp_rl.tasks.grasp.config.ur5.camera import WRIST_CAMERA_FRAME, WRIST_CAMERA_INTRINSICS
-
-        self.env, self.k = env, WRIST_CAMERA_INTRINSICS
-        stage = sim_utils.get_current_stage()
-        root = "/World/envs/env_0/Robot/"
-        cache = UsdGeom.XformCache()
-        m_body = cache.GetLocalToWorldTransform(stage.GetPrimAtPath(root + BODY_PRIM_PATHS[TCP_BODY_NAME]))
-        m_opt = cache.GetLocalToWorldTransform(stage.GetPrimAtPath(root + WRIST_CAMERA_FRAME))
-        rel = torch.tensor([list(row) for row in (m_opt * m_body.GetInverse())], dtype=torch.float32)
-        rel[:3, :3] /= rel[:3, :3].norm(dim=1, keepdim=True)  # drop the scale (USD row-vector matrices)
-        self.p_rel = rel[3, :3].to(env.device)  # optical origin in the body frame
-        self.r_rel = rel[:3, :3].T.contiguous().to(env.device)  # columns: optical axes in the body frame
-        robot = env.scene["robot"]
-        self.robot, self.body = robot, robot.body_names.index(TCP_BODY_NAME)
-
-    def pose(self):
-        import isaaclab.utils.math as math_utils
-
-        pose = self.robot.data.body_link_pose_w.torch[:, self.body]
-        r_body = math_utils.matrix_from_quat(pose[:, 3:7])
-        return pose[:, :3] + (r_body @ self.p_rel), r_body @ self.r_rel
-
-    def project(self, points_w):
-        """Pixel (u, v), depth z and angle off the optical axis [deg] of world points, shape (N, 4)."""
-        pos, rot = self.pose()
-        p = torch.einsum("nji,nj->ni", rot, points_w - pos)
-        u = self.k["fx"] * p[:, 0] / p[:, 2] + self.k["cx"]
-        v = self.k["fy"] * p[:, 1] / p[:, 2] + self.k["cy"]
-        off = torch.rad2deg(torch.atan2(p[:, :2].norm(dim=-1), p[:, 2]))
-        return torch.stack([u, v, p[:, 2], off], dim=-1)
-
-    def tcp_pixel(self):
-        from drone_grasp_rl.tasks.grasp.mdp import frame_pose_w
-
-        uv = self.project(frame_pose_w(self.env, "tcp")[0])[0]
-        return f"({uv[0]:.1f}, {uv[1]:.1f})"
-
-    def in_image(self, proj):
-        u, v, z = proj[:, 0], proj[:, 1], proj[:, 2]
-        return (z > 0) & (u >= 0) & (u < 640) & (v >= 0) & (v < 480)
-
-    def view(self, dist):
-        """Rows (distance [m], center in image, marker in image, center angle [deg], marker angle [deg])."""
-        import isaaclab.utils.math as math_utils
-
-        drone = self.env.scene["drone"].data
-        center = drone.root_pos_w.torch
-        marker = center + math_utils.quat_apply(
-            drone.root_quat_w.torch, torch.tensor(MARKER_OFFSET, device=center.device).expand_as(center)
-        )
-        pc, pm = self.project(center), self.project(marker)
-        return torch.stack([dist, self.in_image(pc).float(), self.in_image(pm).float(), pc[:, 3], pm[:, 3]], -1)
-
-    def yaw_error(self):
-        """Angle between the gripper's closing axis (TCP y) and the drone's y axis, either sign [deg], shape (N,)."""
-        import isaaclab.utils.math as math_utils
-
-        from drone_grasp_rl.tasks.grasp.mdp import frame_pose_w
-
-        _, tcp_q = frame_pose_w(self.env, "tcp")
-        y_tcp = math_utils.matrix_from_quat(tcp_q)[..., 1]
-        y_drone = math_utils.matrix_from_quat(self.env.scene["drone"].data.root_quat_w.torch)[..., 1]
-        return torch.rad2deg(torch.acos((y_tcp * y_drone).sum(-1).abs().clamp(max=1.0)))
 
 
 def report_camera_view(rows, yaw_at_close):
@@ -215,10 +138,22 @@ def main():
         hold = torch.full((n, 4), float("nan"), device=dev)
 
         if args_cli.camera_view:
+            from drone_grasp_rl.tasks.grasp.config.ur5.camera import WristCameraModel
+
             cam = WristCameraModel(base)
             print(f"[eval] camera check: TCP projects to {cam.tcp_pixel()} px (data collection repo: 332, 446)")
             view_rows = []  # per live approach env-step: distance to grasp point, center/marker in image, angles
             yaw_at_close = torch.full((n,), float("nan"), device=dev)
+
+        if args_cli.marker_obs:
+            from isaaclab.managers import ObservationTermCfg
+
+            from drone_grasp_rl.tasks.grasp.config.ur5.camera import marker_drone_pose_b
+            from drone_grasp_rl.tasks.grasp.mdp import frame_pose_b as _fpb
+
+            marker = marker_drone_pose_b(ObservationTermCfg(func=marker_drone_pose_b, params={}), base)
+            marker.reset()
+            marker_rows = []  # (distance, holding, detected, age, position error [m])
 
         obs = env.get_observations()
         with torch.inference_mode():
@@ -259,6 +194,24 @@ def main():
                         view_rows.append(cam.view(rel.norm(dim=-1))[approach])
                     yaw = cam.yaw_error()
                     yaw_at_close = torch.where(live & torch.isnan(yaw_at_close) & gripper.closing, yaw, yaw_at_close)
+                if args_cli.marker_obs:
+                    if bool(dones.any()):
+                        marker.reset(dones.bool().nonzero().squeeze(-1))
+                    reading = marker(base)
+                    true_pos, _ = _fpb(base, "drone")
+                    holding_m = (judge.phase == 1) | (judge.phase == 2)
+                    sel = live & ((judge.phase == APPROACH) | holding_m)
+                    row = torch.stack(
+                        [
+                            rel.norm(dim=-1),
+                            holding_m.float(),
+                            (reading[:, 7] == 0).float(),
+                            reading[:, 7],
+                            (reading[:, :3] - true_pos).norm(dim=-1),
+                        ],
+                        -1,
+                    )
+                    marker_rows.append(row[sel])
                 first_close = live & torch.isnan(closed_at) & gripper.closing
                 closed_at = torch.where(first_close, rel.norm(dim=-1), closed_at)
                 for i in (dones.bool() & ~done_once).nonzero(as_tuple=False).squeeze(-1).tolist():
@@ -327,6 +280,22 @@ def main():
             )
         if args_cli.camera_view and view_rows:
             report_camera_view(torch.cat(view_rows), yaw_at_close)
+        if args_cli.marker_obs and marker_rows:
+            m = torch.cat(marker_rows)
+            for name, sel in (
+                ("approach >30 cm", (m[:, 1] == 0) & (m[:, 0] >= 0.30)),
+                ("approach 15-30 cm", (m[:, 1] == 0) & (m[:, 0] >= 0.15) & (m[:, 0] < 0.30)),
+                ("approach 5-15 cm", (m[:, 1] == 0) & (m[:, 0] >= 0.05) & (m[:, 0] < 0.15)),
+                ("approach <5 cm", (m[:, 1] == 0) & (m[:, 0] < 0.05)),
+                ("holding", m[:, 1] == 1),
+            ):
+                if sel.any():
+                    r = m[sel]
+                    print(
+                        f"[eval] marker obs {name:18s}: detected {100 * r[:, 2].mean():5.1f}%, age median "
+                        f"{1000 * r[:, 3].median():.0f} ms (max {1000 * r[:, 3].max():.0f}), position error median "
+                        f"{1000 * r[:, 4].median():.1f} mm (90th {1000 * r[:, 4].quantile(0.9):.1f})"
+                    )
         grasped = ~torch.isnan(tilt_max)
         if grasped.any():
             deg = torch.rad2deg(tilt_max[grasped])
