@@ -36,7 +36,7 @@ from isaaclab_tasks.utils import resolve_task_config, setup_preset_cli
 
 import drone_grasp_rl.tasks  # noqa: F401
 
-TASK = "DroneGraspRl-Grasp-UR5"
+TASK = "DroneGraspRl-Grasp-UR5"  # default; --task picks a variant (e.g. DroneGraspRl-Grasp-UR5-Stewart)
 
 parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 parser.add_argument("--checkpoint", type=str, required=True)
@@ -54,10 +54,12 @@ parser.add_argument(
     action="store_true",
     help="Also run the ArUco marker observation model and report its detection rate, age and errors by stage.",
 )
+parser.add_argument("--task", type=str, default=TASK, help="Grasp task variant.")
 add_launcher_args(parser)
 parser.set_defaults(device=None)
 args_cli, hydra_args = setup_preset_cli(parser, sys.argv[1:])
 sys.argv = [sys.argv[0]] + hydra_args
+TASK = args_cli.task
 
 
 def report_camera_view(rows, yaw_at_close):

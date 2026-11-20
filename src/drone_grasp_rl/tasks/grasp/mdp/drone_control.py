@@ -73,6 +73,15 @@ class DroneHoverController(ActionTerm):
         self._time = torch.zeros(n, device=dev)
         self._integral = torch.zeros(n, 3, device=dev)
         self._disturbance = torch.zeros(n, 3, device=dev)
+        # base following: received (delayed) base pose ring buffer, follow shift and its velocity
+        self._follow = None
+        if cfg.follow_asset is not None:
+            self._follow = env.scene[cfg.follow_asset]
+            delay = max(1, round(cfg.follow_latency / self._dt))
+            self._base_hist = torch.zeros(delay, n, 3, device=dev)  # x, y, yaw
+            self._base0 = torch.zeros(n, 3, device=dev)
+            self._shift = torch.zeros(n, 3, device=dev)
+            self._shift_vel = torch.zeros(n, 3, device=dev)
         self._preset_index = torch.zeros(n, dtype=torch.long, device=dev)
         self._ref_pos = torch.zeros(n, 3, device=dev)
         names = list(cfg.preset_weights)
@@ -133,6 +142,35 @@ class DroneHoverController(ActionTerm):
         forces[..., 2] = -self._env.sim.cfg.gravity[2] * mass * (~self._motors_off()).unsqueeze(-1)
         self._asset.permanent_wrench_composer.set_forces_and_torques_index(forces=forces, is_global=True)
 
+    def _base_planar(self) -> torch.Tensor:
+        data = self._follow.data
+        pos = data.root_pos_w.torch
+        yaw = math_utils.euler_xyz_from_quat(data.root_quat_w.torch)[2]
+        return torch.stack([pos[:, 0], pos[:, 1], yaw], dim=-1)
+
+    def _follow_shift(self):
+        """Shift (N, 3) and its velocity and acceleration that move the hover target with the received base pose."""
+        cfg = self.cfg
+        now = self._base_planar()
+        now[:, :2] += cfg.follow_noise * torch.randn_like(now[:, :2])
+        self._base_hist = torch.roll(self._base_hist, 1, dims=0)
+        self._base_hist[0] = now
+        rx = self._base_hist[-1]  # the oldest = what the drone has received by now
+        # where the reset-time target would be with the base moved from base0 to rx
+        dyaw = rx[:, 2] - self._base0[:, 2]
+        c, s = torch.cos(dyaw), torch.sin(dyaw)
+        rel = self._p0[:, :2] - self._base0[:, :2]
+        target = rx[:, :2] + torch.stack([c * rel[:, 0] - s * rel[:, 1], s * rel[:, 0] + c * rel[:, 1]], -1)
+        want = torch.zeros_like(self._shift)
+        want[:, :2] = target - self._p0[:, :2]
+        v_cmd = cfg.follow_gain * (want - self._shift)
+        v_cmd = v_cmd * (cfg.follow_max_speed / v_cmd.norm(dim=-1, keepdim=True).clamp(min=1e-9)).clamp(max=1.0)
+        dv = v_cmd - self._shift_vel
+        dv = dv * (cfg.follow_max_accel * self._dt / dv.norm(dim=-1, keepdim=True).clamp(min=1e-9)).clamp(max=1.0)
+        self._shift_vel = self._shift_vel + dv
+        self._shift = self._shift + self._shift_vel * self._dt
+        return self._shift, self._shift_vel, dv / self._dt
+
     def apply_actions(self):
         cfg = self.cfg
         data = self._asset.data
@@ -142,6 +180,9 @@ class DroneHoverController(ActionTerm):
             self._float()
             return
         ref_pos, ref_vel, ref_acc = self._reference(self._time)
+        if self._follow is not None:
+            shift, shift_vel, shift_acc = self._follow_shift()
+            ref_pos, ref_vel, ref_acc = ref_pos + shift, ref_vel + shift_vel, ref_acc + shift_acc
         self._ref_pos = ref_pos
         pose = data.body_link_pose_w.torch[:, self._body]
         pos, quat = pose[:, :3], pose[:, 3:7]
@@ -211,6 +252,12 @@ class DroneHoverController(ActionTerm):
         self._integral[ids] = 0.0
         self._disturbance[ids] = 0.0
         self._ref_pos[ids] = self._p0[ids]
+        if self._follow is not None:
+            base = self._base_planar()[ids]
+            self._base0[ids] = base
+            self._base_hist[:, ids] = base
+            self._shift[ids] = 0.0
+            self._shift_vel[ids] = 0.0
 
 
 @configclass
@@ -258,6 +305,25 @@ class DroneHoverControllerCfg(ActionTermCfg):
 
     disturbance_std: float = 0.0
     """Standard deviation of the random disturbance force per axis [N]; 0 turns it off."""
+
+    follow_asset: str | None = None
+    """Robot whose base the hover target follows in the plane (x, y, yaw), as the real drone would follow the base pose
+    the robot sends to its PX4 position controller (moving bases). None: the target stays in the world."""
+
+    follow_latency: float = 0.1
+    """Delay of the base pose the drone receives [s] (link plus PX4 setpoint handling; assumed)."""
+
+    follow_noise: float = 0.002
+    """Noise of the received base position [m] per axis (assumed)."""
+
+    follow_gain: float = 2.0
+    """[1/s] the follow shift chases the received target at this rate, within the speed and acceleration limits."""
+
+    follow_max_speed: float = 0.5
+    """[m/s] (PX4-style horizontal speed limit for this use; assumed)."""
+
+    follow_max_accel: float = 1.0
+    """[m/s^2] (assumed)."""
 
     disturbance_time: float = 0.5
     """Correlation time of the disturbance force [s]."""

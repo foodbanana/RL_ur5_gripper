@@ -32,7 +32,7 @@ from isaaclab_tasks.utils import resolve_task_config, setup_preset_cli
 
 import drone_grasp_rl.tasks  # noqa: F401
 
-TASK = "DroneGraspRl-Grasp-UR5"
+TASK = "DroneGraspRl-Grasp-UR5"  # default; --task picks a variant (e.g. DroneGraspRl-Grasp-UR5-Stewart)
 PRE_DISTANCE = 0.10
 """Pre-grasp point below the grasp point along the drone z axis [m]."""
 GRASP_OFFSET = (0.0, -0.0013, -0.0045)
@@ -41,10 +41,12 @@ GRASP_OFFSET = (0.0, -0.0013, -0.0045)
 parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 parser.add_argument("--num_envs", type=int, default=25)
 parser.add_argument("--seed", type=int, default=0)
+parser.add_argument("--task", type=str, default=TASK, help="Grasp task variant.")
 add_launcher_args(parser)
 parser.set_defaults(device=None)
 args_cli, hydra_args = setup_preset_cli(parser, sys.argv[1:])
 sys.argv = [sys.argv[0]] + hydra_args
+TASK = args_cli.task
 
 PRE, RISE, CLOSE = 0, 1, 2
 

@@ -188,3 +188,89 @@ class UR5GraspRecordEnvCfg(UR5GraspEnvCfg):
         self.scene.replicate_physics = False
         self.events.reset_drone.params["near_fraction"] = 0.0
         self.curriculum = None
+
+
+@configclass
+class UR5GraspStewartEnvCfg(UR5GraspEnvCfg):
+    """The drone grasp with the UR5 on the closed-loop Stewart platform (``assets/stewart.py``), no table.
+
+    - the robot base is fixed to the platform's top plate (rotation center = mount) by a joint authored per
+      environment before the simulation starts (``mdp.attach_robot_to_base``); robot base 1.0 m above the floor,
+      the drone at the same base-relative targets as on the table
+    - ``base_motion``: the platform controller (pose command -> inverse kinematics -> leg actuators), presets of the
+      data collection repo, amplitude ramped up by the ``base_motion`` curriculum while the success rate holds
+    - the drone follows the base pose in the plane with latency and PX4-style limits (``follow_asset``): the robot
+      sends its base pose, so the targets stay reachable
+    - the policy additionally observes the base IMU (6, appended at the end of the policy group)
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        from isaaclab.managers import CurriculumTermCfg as CurrTerm
+        from isaaclab.managers import ObservationTermCfg as ObsTerm
+
+        from drone_grasp_rl.assets import stewart as st
+        from drone_grasp_rl.assets.bases import STEWART_CFG, STEWART_LEG_JOINTS, STEWART_TOP_BODY
+
+        scene = self.scene
+        scene.table = None
+        scene.replicate_physics = False  # the mount joint is authored in every environment
+        scene.stewart = STEWART_CFG
+        scene.robot = scene.robot.replace(
+            spawn=scene.robot.spawn.replace(fix_root_link=False),
+            init_state=scene.robot.init_state.replace(pos=(0.0, 0.0, st.HEIGHT)),
+        )
+        drone_pos = scene.drone.init_state.pos
+        scene.drone = scene.drone.replace(
+            init_state=scene.drone.init_state.replace(
+                pos=(drone_pos[0], drone_pos[1], drone_pos[2] - grasp.TABLE_TOP_Z + st.HEIGHT)
+            )
+        )
+        self.actions.base_motion = mdp.StewartMotionCfg(
+            asset_name="stewart",
+            leg_joint_names=STEWART_LEG_JOINTS,
+            preset_weights={"small": 1.0, "mid": 1.0, "big": 1.0},
+        )
+        self.actions.drone_hover.follow_asset = "robot"
+        mount = BODY_PRIM_PATHS[BASE_BODY_NAME]
+        self.events.attach_robot = EventTerm(
+            func=mdp.attach_robot_to_base,
+            mode="prestartup",
+            params={
+                "base_body_path": f"Stewart/{STEWART_TOP_BODY}",
+                "robot_body_path": f"Robot/{mount}",
+                "filtered_robot_bodies": [f"Robot/{mount}", f"Robot/{mount}/base_link/base_link_inertia"],
+            },
+        )
+        self.observations.policy.base_imu = ObsTerm(func=mdp.base_imu)
+        self.curriculum.base_motion = CurrTerm(func=mdp.ramp_base_motion, params={"initial": 0.0, "final": 1.0})
+
+
+@configclass
+class UR5GraspStudentEnvCfg(UR5GraspEnvCfg):
+    """The fixed-base grasp with a ``student`` observation group for distilling the teacher into a deployable policy.
+
+    The student sees only what the real robot can measure: arm joints, gripper position, TCP (forward kinematics),
+    its own last action and gripper command, and the drone pose from the wrist camera's ArUco markers
+    (``camera.marker_drone_pose_b``: detection by geometry, noise and latency from ``scripts/study_aruco.py``, the
+    reading held with its age when no marker is seen), over the last ``STUDENT_HISTORY`` policy steps. The teacher
+    keeps its ``policy`` group (52 entries with the simulator-only state).
+    """
+
+    STUDENT_HISTORY = 3
+
+    def __post_init__(self):
+        super().__post_init__()
+        import copy
+
+        from isaaclab.managers import ObservationTermCfg as ObsTerm
+
+        from .camera import marker_drone_pose_b
+
+        student = copy.deepcopy(self.observations.policy)
+        for name in ("drone_pos_true", "drone_quat_true", "drone_vel", "drone_in_tcp", "finger_contact", "grasped"):
+            setattr(student, name, None)
+        student.drone_pose = ObsTerm(func=marker_drone_pose_b)
+        student.history_length = self.STUDENT_HISTORY
+        student.flatten_history_dim = True
+        self.observations.student = student
