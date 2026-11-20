@@ -274,3 +274,65 @@ class UR5GraspStudentEnvCfg(UR5GraspEnvCfg):
         student.history_length = self.STUDENT_HISTORY
         student.flatten_history_dim = True
         self.observations.student = student
+
+
+@configclass
+class UR5GraspHuskyEnvCfg(UR5GraspEnvCfg):
+    """The drone grasp with the UR5 on a Husky A200 that drives straight back and forth (no table).
+
+    The Husky drives along its x axis like the data collection repo's kinematic Husky (``mdp.HuskyMotion``:
+    0.30 m out and back at 0.05 m/s, provisional), as a carriage on a stiff driven rail that carries the Husky's
+    look and, through a fixed joint, the robot (Clearpath's Husky + UR5 mount, yaw -90 deg). Drone following,
+    base IMU and the motion curriculum as in :class:`UR5GraspStewartEnvCfg`.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        import math
+
+        from isaaclab.managers import CurriculumTermCfg as CurrTerm
+        from isaaclab.managers import ObservationTermCfg as ObsTerm
+
+        from drone_grasp_rl.assets.bases import (
+            HUSKY_BASE_HEIGHT,
+            HUSKY_RAIL_CFG,
+            HUSKY_ROBOT_MOUNT_POS,
+            HUSKY_ROBOT_MOUNT_YAW_DEG,
+            HUSKY_VISUAL_CFG,
+        )
+
+        scene = self.scene
+        scene.table = None
+        scene.replicate_physics = False
+        scene.husky_rail = HUSKY_RAIL_CFG
+        scene.husky = HUSKY_VISUAL_CFG
+        yaw = math.radians(HUSKY_ROBOT_MOUNT_YAW_DEG)
+        base = (HUSKY_ROBOT_MOUNT_POS[0], HUSKY_ROBOT_MOUNT_POS[1], HUSKY_BASE_HEIGHT + HUSKY_ROBOT_MOUNT_POS[2])
+        scene.robot = scene.robot.replace(
+            spawn=scene.robot.spawn.replace(fix_root_link=False),
+            init_state=scene.robot.init_state.replace(pos=base, rot=(0.0, 0.0, math.sin(yaw / 2), math.cos(yaw / 2))),
+        )
+        # the drone at the same base-relative place as on the table
+        d = scene.drone.init_state.pos
+        d_b = (d[0], d[1], d[2] - grasp.TABLE_TOP_Z)
+        c, s = math.cos(yaw), math.sin(yaw)
+        scene.drone = scene.drone.replace(
+            init_state=scene.drone.init_state.replace(
+                pos=(base[0] + c * d_b[0] - s * d_b[1], base[1] + s * d_b[0] + c * d_b[1], base[2] + d_b[2])
+            )
+        )
+        self.actions.base_motion = mdp.HuskyMotionCfg(asset_name="husky_rail")
+        self.actions.drone_hover.follow_asset = "robot"
+        mount = BODY_PRIM_PATHS[BASE_BODY_NAME]
+        self.events.attach_robot = EventTerm(
+            func=mdp.attach_robot_to_base,
+            mode="prestartup",
+            params={
+                "base_body_path": "HuskyRail/carriage",
+                "robot_body_path": f"Robot/{mount}",
+                "mount_pos": HUSKY_ROBOT_MOUNT_POS,
+                "mount_yaw_deg": HUSKY_ROBOT_MOUNT_YAW_DEG,
+            },
+        )
+        self.observations.policy.base_imu = ObsTerm(func=mdp.base_imu)
+        self.curriculum.base_motion = CurrTerm(func=mdp.ramp_base_motion, params={"initial": 0.0, "final": 1.0})

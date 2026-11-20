@@ -13,6 +13,7 @@ top plate (with the robot on it) moves where the legs push it.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import MISSING
 from typing import TYPE_CHECKING
@@ -112,6 +113,94 @@ class StewartMotionCfg(ActionTermCfg):
     """Multiplies every preset's amplitude (the curriculum ramps it from 0)."""
 
 
+class HuskyMotion(ActionTerm):
+    """Straight back-and-forth of the Husky along its x axis, every physics step (no policy input).
+
+    The data collection repo moved the Husky kinematically (no wheel physics). Here a carriage on a stiff, driven
+    rail (``assets/bases.py`` ``HUSKY_RAIL_CFG``) gets the position and velocity targets of a trapezoidal speed
+    profile (``HUSKY_TRAJECTORY``: out ``distance``, dwell, back, dwell, ...). Each reset starts at the rail's
+    center, heading forward or backward at random. ``amplitude_scale`` (curriculum) scales the path.
+    """
+
+    cfg: HuskyMotionCfg
+
+    def __init__(self, cfg: HuskyMotionCfg, env: ManagerBasedEnv):
+        from drone_grasp_rl.assets.bases import HUSKY_DRIVE_JOINT, HUSKY_TRAJECTORY
+
+        super().__init__(cfg, env)
+        n, dev = self.num_envs, self.device
+        self._dt = env.physics_dt
+        tr = HUSKY_TRAJECTORY
+        self._v, self._a, self._d, self._dwell = tr["max_speed"], tr["accel"], tr["distance"], tr["dwell"]
+        self._t_acc = self._v / self._a
+        self._leg = 2 * self._t_acc + (self._d - self._v * self._t_acc) / self._v
+        self._period = 2 * (self._leg + self._dwell)
+        self._time = torch.zeros(n, device=dev)
+        self._sign = torch.ones(n, device=dev)
+        self._joint = [self._asset.joint_names.index(HUSKY_DRIVE_JOINT)]
+        self.amplitude_scale = cfg.amplitude_scale
+
+    @property
+    def action_dim(self) -> int:
+        return 0
+
+    @property
+    def raw_actions(self) -> torch.Tensor:
+        return torch.zeros(self.num_envs, 0, device=self.device)
+
+    @property
+    def processed_actions(self) -> torch.Tensor:
+        return self.raw_actions
+
+    def process_actions(self, actions: torch.Tensor):
+        pass
+
+    def _leg_profile(self, tau: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Distance and speed along one leg (0 -> distance) at time tau in [0, leg]."""
+        v, a, ta, leg = self._v, self._a, self._t_acc, self._leg
+        rest = (leg - tau).clamp(min=0.0)
+        s = torch.where(
+            tau < ta,
+            0.5 * a * tau**2,
+            torch.where(tau < leg - ta, 0.5 * a * ta**2 + v * (tau - ta), self._d - 0.5 * a * rest**2),
+        )
+        speed = torch.where(tau < ta, a * tau, torch.where(tau < leg - ta, torch.full_like(tau, v), a * rest))
+        return s, speed
+
+    def apply_actions(self):
+        self._time += self._dt
+        t = torch.remainder(self._time, self._period)
+        out = t < self._leg
+        at_end = (t >= self._leg) & (t < self._leg + self._dwell)
+        back = (t >= self._leg + self._dwell) & (t < 2 * self._leg + self._dwell)
+        s_out, v_out = self._leg_profile(t.clamp(max=self._leg))
+        s_back, v_back = self._leg_profile((t - self._leg - self._dwell).clamp(0.0, self._leg))
+        zero = torch.zeros_like(t)
+        pos_1d = torch.where(out, s_out, torch.where(at_end, zero + self._d, torch.where(back, self._d - s_back, zero)))
+        vel_1d = torch.where(out, v_out, torch.where(back, -v_back, zero))
+        k = self._sign * self.amplitude_scale
+        self._asset.set_joint_position_target_index(target=(k * pos_1d)[:, None], joint_ids=self._joint)
+        self._asset.set_joint_velocity_target_index(target=(k * vel_1d)[:, None], joint_ids=self._joint)
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> None:
+        ids = _to_index(env_ids, self.device)
+        if isinstance(ids, slice):
+            ids = torch.arange(self.num_envs, device=self.device)[ids]
+        if ids.numel() == 0:
+            return
+        self._time[ids] = 0.0
+        self._sign[ids] = torch.where(torch.rand(ids.numel(), device=self.device) < 0.5, -1.0, 1.0)
+
+
+@configclass
+class HuskyMotionCfg(ActionTermCfg):
+    """Configuration of :class:`HuskyMotion`."""
+
+    class_type: type[ActionTerm] = HuskyMotion
+    asset_name: str = "husky_rail"
+    amplitude_scale: float = 1.0
+
+
 class base_imu(ManagerTermBase):
     """Robot base IMU in the base frame, shape (N, 6): angular velocity [rad/s] and specific force [m/s^2]
     (acceleration minus gravity, so a base at rest reads +9.81 on z), like the data set's ``observation.base_imu``.
@@ -155,11 +244,13 @@ def attach_robot_to_base(
     robot_body_path: str,
     filtered_robot_bodies: Sequence[str] = (),
     joint_name: str = "RobotMount",
+    mount_pos: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    mount_yaw_deg: float = 0.0,
 ):
     """Prestartup event: fix the robot's root body to the base's mount body with a joint outside both articulations
     (as the data collection repo's moving-base scene does; inside, USD Physics parsing would pull the base into the
-    robot's articulation). The two bodies must already sit at the mount pose. Collisions between the base and the
-    robot bodies that rest on it are filtered.
+    robot's articulation). The two bodies must already sit at the mount pose (``mount_pos``, ``mount_yaw_deg`` in the
+    base body's frame). Collisions between the base and the robot bodies that rest on it are filtered.
 
     Paths are relative to each environment prim. Needs ``scene.replicate_physics = False`` (the joint is authored in
     every environment, after cloning).
@@ -175,8 +266,9 @@ def attach_robot_to_base(
         joint = UsdPhysics.FixedJoint.Define(stage, f"{root}/{joint_name}")
         joint.CreateBody0Rel().SetTargets([base])
         joint.CreateBody1Rel().SetTargets([robot])
-        joint.CreateLocalPos0Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
-        joint.CreateLocalRot0Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
+        half = math.radians(mount_yaw_deg) / 2
+        joint.CreateLocalPos0Attr().Set(Gf.Vec3f(*[float(v) for v in mount_pos]))
+        joint.CreateLocalRot0Attr().Set(Gf.Quatf(math.cos(half), 0.0, 0.0, math.sin(half)))
         joint.CreateLocalPos1Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
         joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
         joint.CreateExcludeFromArticulationAttr().Set(True)

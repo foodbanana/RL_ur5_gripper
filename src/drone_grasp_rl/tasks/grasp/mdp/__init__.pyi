@@ -4,6 +4,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 __all__ = [
+    "HuskyMotion",
+    "HuskyMotionCfg",
     "StewartMotion",
     "StewartMotionCfg",
     "attach_robot_to_base",
@@ -69,7 +71,15 @@ from .actions import (
     ProfiledBinaryJointPositionAction,
     ProfiledBinaryJointPositionActionCfg,
 )
-from .base_motion import StewartMotion, StewartMotionCfg, attach_robot_to_base, base_imu, ramp_base_motion
+from .base_motion import (
+    HuskyMotion,
+    HuskyMotionCfg,
+    StewartMotion,
+    StewartMotionCfg,
+    attach_robot_to_base,
+    base_imu,
+    ramp_base_motion,
+)
 from .curriculums import ramp_reward_weight
 from .drone_control import HOVER_PRESETS, DroneHoverController, DroneHoverControllerCfg, drone_target_pos_b
 from .events import hold_drone_in_place, reset_drone_at_targets
