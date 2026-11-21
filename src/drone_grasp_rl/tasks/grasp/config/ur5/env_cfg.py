@@ -268,6 +268,9 @@ class UR5GraspStewartEnvCfg(UR5GraspEnvCfg):
         self.observations.policy.base_imu = ObsTerm(func=mdp.base_imu)
         # privileged (teacher): base velocity, displacement and tilt; scaled to about unit size
         self.observations.policy.base_state = ObsTerm(func=mdp.base_state, scale=5.0)
+        # pushing the drone was the main failure on the moving platform: -40 (fixed base -20) took mid from
+        # 90.6 to 94.5 % with no knocked drone (try25e vs try25f)
+        self.rewards.drone_push.weight = -40.0
         self.curriculum.base_motion = CurrTerm(func=mdp.ramp_base_motion, params={"initial": 0.0, "final": 1.0})
 
 
