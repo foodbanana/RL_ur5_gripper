@@ -276,6 +276,9 @@ def attach_robot_to_base(
     for i in range(env.num_envs):
         root = f"/World/envs/env_{i}"
         base, robot = f"{root}/{base_body_path}", f"{root}/{robot_body_path}"
+        if not stage.GetPrimAtPath(base) or not stage.GetPrimAtPath(robot):
+            # Newton clones the environments from env_0 in its model builder; only env_0 is on the USD stage
+            continue
         joint = UsdPhysics.FixedJoint.Define(stage, f"{root}/{joint_name}")
         joint.CreateBody0Rel().SetTargets([base])
         joint.CreateBody1Rel().SetTargets([robot])
@@ -327,3 +330,52 @@ class ramp_base_motion(ManagerTermBase):
                 self._scale = min(final, self._scale + (final - initial) * phase.numel() / resets_to_full)
         env.action_manager.get_term(term_name).amplitude_scale = self._scale
         return self._scale
+
+
+def spawn_mount_joint(prim_path: str, cfg: MountJointCfg, translation=None, orientation=None, **kwargs):
+    """Spawner (Newton): the robot mount joint in the source environment only, which Newton's model builder clones.
+
+    Same joint as :func:`attach_robot_to_base` (PhysX path), plus ``MjcEqualityWeldAPI`` with a stiff ``mjc:solref``:
+    Newton turns the excluded fixed joint into a MuJoCo WELD, whose default softness would let the robot sag.
+    """
+    from pxr import Gf, Sdf, UsdPhysics
+
+    import isaaclab.sim as sim_utils
+
+    stage = sim_utils.get_current_stage()
+    root = prim_path.rsplit("/", 1)[0]
+    base, robot = f"{root}/{cfg.base_body_path}", f"{root}/{cfg.robot_body_path}"
+    joint = UsdPhysics.FixedJoint.Define(stage, prim_path)
+    joint.CreateBody0Rel().SetTargets([base])
+    joint.CreateBody1Rel().SetTargets([robot])
+    half = math.radians(cfg.mount_yaw_deg) / 2
+    joint.CreateLocalPos0Attr().Set(Gf.Vec3f(*[float(v) for v in cfg.mount_pos]))
+    joint.CreateLocalRot0Attr().Set(Gf.Quatf(math.cos(half), 0.0, 0.0, math.sin(half)))
+    joint.CreateLocalPos1Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
+    joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
+    joint.CreateExcludeFromArticulationAttr().Set(True)
+    prim = joint.GetPrim()
+    if cfg.stiff_weld:
+        prim.AddAppliedSchema("MjcEqualityWeldAPI")
+        prim.CreateAttribute("mjc:solref", Sdf.ValueTypeNames.DoubleArray).Set([0.005, 1.0])
+        prim.CreateAttribute("mjc:solimp", Sdf.ValueTypeNames.DoubleArray).Set([0.95, 0.99, 0.001, 0.5, 2.0])
+    for body in cfg.filtered_robot_bodies:
+        UsdPhysics.FilteredPairsAPI.Apply(stage.GetPrimAtPath(f"{root}/{body}")).CreateFilteredPairsRel().AddTarget(
+            base
+        )
+    return prim
+
+
+@configclass
+class MountJointCfg:
+    """Spawn configuration of :func:`spawn_mount_joint` (paths relative to the environment prim)."""
+
+    func: object = spawn_mount_joint
+    base_body_path: str = MISSING
+    robot_body_path: str = MISSING
+    mount_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    mount_yaw_deg: float = 0.0
+    filtered_robot_bodies: list[str] = []
+    stiff_weld: bool = False
+    """Author ``MjcEqualityWeldAPI`` with a stiff solref (with it the robot fell over: the weld did not hold)."""
+    visible: bool = True

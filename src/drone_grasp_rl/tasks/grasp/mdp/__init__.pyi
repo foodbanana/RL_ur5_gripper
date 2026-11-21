@@ -6,6 +6,7 @@
 __all__ = [
     "HuskyMotion",
     "HuskyMotionCfg",
+    "MountJointCfg",
     "StewartMotion",
     "StewartMotionCfg",
     "attach_robot_to_base",
@@ -74,6 +75,7 @@ from .actions import (
 from .base_motion import (
     HuskyMotion,
     HuskyMotionCfg,
+    MountJointCfg,
     StewartMotion,
     StewartMotionCfg,
     attach_robot_to_base,
