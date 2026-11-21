@@ -150,7 +150,16 @@ mid 155 mm/s·74 mm·3.8°, big 310 mm/s·149 mm·7.7°.
 - 실패의 대부분은 "드론 밀림": 드론은 x, y만 따라가므로 base의 위아래 움직임(big 최대 0.3 m/s)을 팔이 흡수해야 함
 - 시범 300개: `datasets/lerobot_v21/local/stewart25h_moving_vdr_depth_300` (48,977 프레임, 검수 6/6 PASS,
   small 155 / mid 119 / big 26). 이전 23c 데이터셋은 HDD로 옮김
-- 학생 증류 `ss1_stewart_marker`: 74.2% (small·mid·big 섞음) → RL 미세조정 `ss2_stewart_rl` 진행
+
+| Stewart 학생 (마커 + base IMU) | small | mid | big |
+|---|---|---|---|
+| 증류 `ss1_stewart_marker` (1500 it) | 74.2% (세 프리셋 섞음) | | |
+| **+ RL 미세조정 `ss2_stewart_rl`** (1500 it) | **93.8%** | **87.1%** | **34.8%** |
+| 선생 `25h` (비교) | 96.9% | 94.1% | 60.9% |
+
+- 학생은 base 상태(속도·이동)를 못 보고 IMU만 봄 → 선생과의 차이가 mid·big에서 큼. 실패는 대부분 드론 밀림
+- 개선 후보: 학생 입력 기록을 더 길게(3 → 10스텝) 또는 RNN, 실물에서 얻을 수 있는 Stewart 상태(다리 길이 → 순기구학으로 윗판 자세·속도)를
+  학생 입력에 추가 (실물 Stewart 제어기가 다리 길이를 알기 때문에 배포 가능)
 
 ### Newton에서 움직이는 베이스 (미해결)
 - Newton은 env_0만 stage에 두고 모델 빌더에서 복제한다. 로봇 고정 조인트를 env_0에 spawner로 만들도록 바꿔 설정 오류는 없앴지만,
