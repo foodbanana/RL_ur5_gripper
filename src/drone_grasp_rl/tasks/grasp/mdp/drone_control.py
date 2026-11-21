@@ -78,8 +78,8 @@ class DroneHoverController(ActionTerm):
         if cfg.follow_asset is not None:
             self._follow = env.scene[cfg.follow_asset]
             delay = max(1, round(cfg.follow_latency / self._dt))
-            self._base_hist = torch.zeros(delay, n, 3, device=dev)  # x, y, yaw
-            self._base0 = torch.zeros(n, 3, device=dev)
+            self._base_hist = torch.zeros(delay, n, 4, device=dev)  # x, y, yaw, z
+            self._base0 = torch.zeros(n, 4, device=dev)
             self._shift = torch.zeros(n, 3, device=dev)
             self._shift_vel = torch.zeros(n, 3, device=dev)
         self._preset_index = torch.zeros(n, dtype=torch.long, device=dev)
@@ -146,7 +146,7 @@ class DroneHoverController(ActionTerm):
         data = self._follow.data
         pos = data.root_pos_w.torch
         yaw = math_utils.euler_xyz_from_quat(data.root_quat_w.torch)[2]
-        return torch.stack([pos[:, 0], pos[:, 1], yaw], dim=-1)
+        return torch.stack([pos[:, 0], pos[:, 1], yaw, pos[:, 2]], dim=-1)
 
     def _follow_shift(self):
         """Shift (N, 3) and its velocity and acceleration that move the hover target with the received base pose."""
@@ -163,6 +163,8 @@ class DroneHoverController(ActionTerm):
         target = rx[:, :2] + torch.stack([c * rel[:, 0] - s * rel[:, 1], s * rel[:, 0] + c * rel[:, 1]], -1)
         want = torch.zeros_like(self._shift)
         want[:, :2] = target - self._p0[:, :2]
+        if cfg.follow_z:
+            want[:, 2] = rx[:, 3] - self._base0[:, 3]
         v_cmd = cfg.follow_gain * (want - self._shift)
         v_cmd = v_cmd * (cfg.follow_max_speed / v_cmd.norm(dim=-1, keepdim=True).clamp(min=1e-9)).clamp(max=1.0)
         dv = v_cmd - self._shift_vel
@@ -309,6 +311,9 @@ class DroneHoverControllerCfg(ActionTermCfg):
     follow_asset: str | None = None
     """Robot whose base the hover target follows in the plane (x, y, yaw), as the real drone would follow the base pose
     the robot sends to its PX4 position controller (moving bases). None: the target stays in the world."""
+
+    follow_z: bool = False
+    """Also follow the base's height change (PX4 can; off by default: the arm absorbs the base's vertical motion)."""
 
     follow_latency: float = 0.1
     """Delay of the base pose the drone receives [s] (link plus PX4 setpoint handling; assumed)."""

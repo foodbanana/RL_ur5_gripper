@@ -59,7 +59,9 @@ BIG_AMPLITUDE = {"x": 0.15, "y": 0.10, "z": 0.15, "roll": 0.105, "pitch": 0.105,
 MOTION_PRESETS = {"static": 0.0, "small": 0.25, "mid": 0.5, "big": 1.0}
 """Scale of :data:`BIG_AMPLITUDE` per preset."""
 RAMP_TIME = 5.0
-"""[s] the motion fades in with 10u^3 - 15u^4 + 6u^5 (continuous position, velocity and acceleration)."""
+"""[s] the data collection repo's fade-in with 10u^3 - 15u^4 + 6u^5 (continuous position, velocity, acceleration).
+The grasp task uses 1 s (``StewartMotionCfg.ramp_time``): with 5 s the teacher grasped (in about 4 s) before the
+platform really moved."""
 
 
 def anchors(device="cpu") -> tuple[torch.Tensor, torch.Tensor]:
@@ -99,8 +101,8 @@ def nominal_leg_length() -> float:
     return float(leg_lengths(torch.zeros(1, 6), b, p)[0, 0])
 
 
-def ramp(t: torch.Tensor) -> torch.Tensor:
-    u = (t / RAMP_TIME).clamp(0.0, 1.0)
+def ramp(t: torch.Tensor, ramp_time: float = RAMP_TIME) -> torch.Tensor:
+    u = (t / ramp_time).clamp(0.0, 1.0)
     return 10 * u**3 - 15 * u**4 + 6 * u**5
 
 
@@ -108,8 +110,8 @@ class SineMotion:
     """Top-plate pose command of the data collection repo: per axis ``ramp(t) * scale * A_k * sin(w_k t + phi_k)``,
     ``w_k = c_k * BASE_OMEGA[k]``, ``c_k ~ U(0.7, 1.3)`` and ``phi_k ~ U(0, 2 pi)`` drawn per environment at reset."""
 
-    def __init__(self, num_envs: int, device, generator: torch.Generator | None = None):
-        self.n, self.device, self.gen = num_envs, device, generator
+    def __init__(self, num_envs: int, device, generator: torch.Generator | None = None, ramp_time: float = RAMP_TIME):
+        self.n, self.device, self.gen, self.ramp_time = num_envs, device, generator, ramp_time
         self.amp = torch.tensor([BIG_AMPLITUDE[k] for k in AXES], device=device)
         self.omega0 = torch.tensor([BASE_OMEGA[k] for k in AXES], device=device)
         self.scale = torch.zeros(num_envs, device=device)
@@ -125,7 +127,7 @@ class SineMotion:
 
     def pose(self, t: torch.Tensor) -> torch.Tensor:
         """Pose command (N, 6) at time t (N,) [s] since the reset: x, y, z offsets [m], roll, pitch, yaw [rad]."""
-        s = (ramp(t) * self.scale)[:, None]
+        s = (ramp(t, self.ramp_time) * self.scale)[:, None]
         return s * self.amp * torch.sin(self.omega * t[:, None] + self.phase)
 
     def velocity(self, t: torch.Tensor, dt: float = 1e-3) -> torch.Tensor:

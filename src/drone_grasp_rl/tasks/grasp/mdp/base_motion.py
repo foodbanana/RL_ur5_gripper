@@ -57,7 +57,7 @@ class StewartMotion(ActionTerm):
         self._preset_probs = weights / weights.sum()
         self._preset_scale = torch.tensor([st.MOTION_PRESETS[k] for k in self.preset_names], device=dev)
         self._preset_index = torch.zeros(n, dtype=torch.long, device=dev)
-        self.motion = st.SineMotion(n, dev)
+        self.motion = st.SineMotion(n, dev, ramp_time=cfg.ramp_time)
         self.amplitude_scale = cfg.amplitude_scale
         self._time = torch.zeros(n, device=dev)
         self.command = torch.zeros(n, 6, device=dev)
@@ -111,6 +111,9 @@ class StewartMotionCfg(ActionTermCfg):
     """Probability of each motion preset (``assets/stewart.py`` ``MOTION_PRESETS``) per reset."""
     amplitude_scale: float = 1.0
     """Multiplies every preset's amplitude (the curriculum ramps it from 0)."""
+    ramp_time: float = 1.0
+    """[s] fade-in after each reset (the data collection repo: 5 s). Each reset draws a new random phase, so the
+    platform is in full motion, at a random point of it, after this time; with 5 s the grasp was over first."""
 
 
 class HuskyMotion(ActionTerm):
@@ -119,7 +122,8 @@ class HuskyMotion(ActionTerm):
     The data collection repo moved the Husky kinematically (no wheel physics). Here a carriage on a stiff, driven
     rail (``assets/bases.py`` ``HUSKY_RAIL_CFG``) gets the position and velocity targets of a trapezoidal speed
     profile (``HUSKY_TRAJECTORY``: out ``distance``, dwell, back, dwell, ...). Each reset starts at the rail's
-    center, heading forward or backward at random. ``amplitude_scale`` (curriculum) scales the path.
+    center at a random point of the cycle (speed faded in over ``ramp_time``), heading forward or backward at
+    random. ``amplitude_scale`` (curriculum) scales the path.
     """
 
     cfg: HuskyMotionCfg
@@ -137,6 +141,8 @@ class HuskyMotion(ActionTerm):
         self._period = 2 * (self._leg + self._dwell)
         self._time = torch.zeros(n, device=dev)
         self._sign = torch.ones(n, device=dev)
+        self._phase = torch.zeros(n, device=dev)
+        self._pos = torch.zeros(n, device=dev)
         self._joint = [self._asset.joint_names.index(HUSKY_DRIVE_JOINT)]
         self.amplitude_scale = cfg.amplitude_scale
 
@@ -169,18 +175,21 @@ class HuskyMotion(ActionTerm):
 
     def apply_actions(self):
         self._time += self._dt
-        t = torch.remainder(self._time, self._period)
+        t = torch.remainder(self._time + self._phase, self._period)
         out = t < self._leg
-        at_end = (t >= self._leg) & (t < self._leg + self._dwell)
         back = (t >= self._leg + self._dwell) & (t < 2 * self._leg + self._dwell)
-        s_out, v_out = self._leg_profile(t.clamp(max=self._leg))
-        s_back, v_back = self._leg_profile((t - self._leg - self._dwell).clamp(0.0, self._leg))
+        _, v_out = self._leg_profile(t.clamp(max=self._leg))
+        _, v_back = self._leg_profile((t - self._leg - self._dwell).clamp(0.0, self._leg))
         zero = torch.zeros_like(t)
-        pos_1d = torch.where(out, s_out, torch.where(at_end, zero + self._d, torch.where(back, self._d - s_back, zero)))
         vel_1d = torch.where(out, v_out, torch.where(back, -v_back, zero))
-        k = self._sign * self.amplitude_scale
-        self._asset.set_joint_position_target_index(target=(k * pos_1d)[:, None], joint_ids=self._joint)
-        self._asset.set_joint_velocity_target_index(target=(k * vel_1d)[:, None], joint_ids=self._joint)
+        # start anywhere in the cycle: from rest at the reset position, the speed of the profile at that phase fades
+        # in over ramp_time and the position integrates it (the path keeps its shape, shifted to the start)
+        u = (self._time / self.cfg.ramp_time).clamp(0.0, 1.0)
+        fade = 10 * u**3 - 15 * u**4 + 6 * u**5
+        vel = self._sign * self.amplitude_scale * fade * vel_1d
+        self._pos = self._pos + vel * self._dt
+        self._asset.set_joint_position_target_index(target=self._pos[:, None], joint_ids=self._joint)
+        self._asset.set_joint_velocity_target_index(target=vel[:, None], joint_ids=self._joint)
 
     def reset(self, env_ids: Sequence[int] | None = None) -> None:
         ids = _to_index(env_ids, self.device)
@@ -189,6 +198,8 @@ class HuskyMotion(ActionTerm):
         if ids.numel() == 0:
             return
         self._time[ids] = 0.0
+        self._pos[ids] = 0.0
+        self._phase[ids] = self._period * torch.rand(ids.numel(), device=self.device)
         self._sign[ids] = torch.where(torch.rand(ids.numel(), device=self.device) < 0.5, -1.0, 1.0)
 
 
@@ -199,6 +210,8 @@ class HuskyMotionCfg(ActionTermCfg):
     class_type: type[ActionTerm] = HuskyMotion
     asset_name: str = "husky_rail"
     amplitude_scale: float = 1.0
+    ramp_time: float = 1.0
+    """[s] speed fade-in after each reset, which starts at a random point of the back-and-forth cycle."""
 
 
 class base_imu(ManagerTermBase):

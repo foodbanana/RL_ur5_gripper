@@ -166,6 +166,12 @@ def main():
             marker.reset()
             marker_rows = []  # (distance, holding, detected, age, position error [m])
 
+        moving = "base_motion" in base.action_manager.active_terms
+        if moving:  # how much the base moves while the policy approaches (is the motion relevant to the grasp?)
+            base_start = robot.data.root_pos_w.torch.clone()
+            base_move = torch.zeros(n, 4, device=dev)  # max planar, max vertical [m], max speed [m/s], max tilt [rad]
+            approach_time = torch.zeros(n, device=dev)
+
         obs = env.get_observations()
         with torch.inference_mode():
             while not bool(done_once.all()):
@@ -223,6 +229,21 @@ def main():
                         -1,
                     )
                     marker_rows.append(row[sel])
+                if moving:
+                    appr = live & (judge.phase == APPROACH)
+                    d = robot.data.root_pos_w.torch - base_start
+                    up = math_utils.matrix_from_quat(robot.data.root_quat_w.torch)[..., 2, 2].clamp(-1.0, 1.0)
+                    now = torch.stack(
+                        [
+                            d[:, :2].norm(dim=-1),
+                            d[:, 2].abs(),
+                            robot.data.root_lin_vel_w.torch.norm(dim=-1),
+                            torch.acos(up),
+                        ],
+                        -1,
+                    )
+                    base_move = torch.where(appr[:, None], torch.fmax(base_move, now), base_move)
+                    approach_time += appr.float() * base.step_dt
                 first_close = live & torch.isnan(closed_at) & gripper.closing
                 closed_at = torch.where(first_close, rel.norm(dim=-1), closed_at)
                 for i in (dones.bool() & ~done_once).nonzero(as_tuple=False).squeeze(-1).tolist():
@@ -307,6 +328,16 @@ def main():
                         f"{1000 * r[:, 3].median():.0f} ms (max {1000 * r[:, 3].max():.0f}), position error median "
                         f"{1000 * r[:, 4].median():.1f} mm (90th {1000 * r[:, 4].quantile(0.9):.1f})"
                     )
+        if moving:
+            bm = base_move
+            print(
+                f"[eval] base motion during the approach (per episode max, median / 90th pct): planar "
+                f"{1000 * bm[:, 0].median():.0f} / {1000 * bm[:, 0].quantile(0.9):.0f} mm, vertical "
+                f"{1000 * bm[:, 1].median():.0f} / {1000 * bm[:, 1].quantile(0.9):.0f} mm, speed "
+                f"{1000 * bm[:, 2].median():.0f} / {1000 * bm[:, 2].quantile(0.9):.0f} mm/s, tilt "
+                f"{torch.rad2deg(bm[:, 3]).median():.1f} / {torch.rad2deg(bm[:, 3]).quantile(0.9):.1f} deg; "
+                f"approach time median {approach_time.median():.1f} s"
+            )
         grasped = ~torch.isnan(tilt_max)
         if grasped.any():
             deg = torch.rad2deg(tilt_max[grasped])
