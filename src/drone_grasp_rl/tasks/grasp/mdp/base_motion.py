@@ -379,3 +379,18 @@ class MountJointCfg:
     stiff_weld: bool = False
     """Author ``MjcEqualityWeldAPI`` with a stiff solref (with it the robot fell over: the weld did not hold)."""
     visible: bool = True
+
+
+def base_state(env: ManagerBasedEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """Privileged moving-base state (teacher only), shape (N, 12): the robot base's linear and angular velocity in its
+    own frame [m/s, rad/s], its displacement from the episode's start pose in the start frame's axes [m] and gravity
+    in the base frame (tilt). The base IMU alone gives angular velocity and acceleration, not where the base is or how
+    fast it goes; the teacher plateaued at about 81 % success on the moving Stewart platform without them."""
+    data = env.scene[asset_cfg.name].data
+    quat = data.root_quat_w.torch
+    lin = math_utils.quat_apply_inverse(quat, data.root_lin_vel_w.torch)
+    ang = math_utils.quat_apply_inverse(quat, data.root_ang_vel_w.torch)
+    start = data.default_root_state.torch[:, :3] + env.scene.env_origins
+    disp = data.root_pos_w.torch - start
+    grav = math_utils.quat_apply_inverse(quat, torch.tensor([0.0, 0.0, -1.0], device=env.device).expand_as(lin))
+    return torch.cat([lin, ang, disp, grav], dim=-1)

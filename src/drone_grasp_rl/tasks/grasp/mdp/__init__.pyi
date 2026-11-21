@@ -11,6 +11,7 @@ __all__ = [
     "StewartMotionCfg",
     "attach_robot_to_base",
     "base_imu",
+    "base_state",
     "ramp_base_motion",
     "HOVER_PRESETS",
     "DroneHoverController",
@@ -80,6 +81,7 @@ from .base_motion import (
     StewartMotionCfg,
     attach_robot_to_base,
     base_imu,
+    base_state,
     ramp_base_motion,
 )
 from .curriculums import ramp_reward_weight

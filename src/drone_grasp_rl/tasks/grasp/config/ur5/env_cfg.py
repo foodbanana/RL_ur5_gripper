@@ -266,6 +266,8 @@ class UR5GraspStewartEnvCfg(UR5GraspEnvCfg):
             filtered_robot_bodies=[f"Robot/{mount}", f"Robot/{mount}/base_link/base_link_inertia"],
         )
         self.observations.policy.base_imu = ObsTerm(func=mdp.base_imu)
+        # privileged (teacher): base velocity, displacement and tilt; scaled to about unit size
+        self.observations.policy.base_state = ObsTerm(func=mdp.base_state, scale=5.0)
         self.curriculum.base_motion = CurrTerm(func=mdp.ramp_base_motion, params={"initial": 0.0, "final": 1.0})
 
 
@@ -300,6 +302,8 @@ def _add_student_obs(cfg):
     student = copy.deepcopy(cfg.observations.policy)
     for name in ("drone_pos_true", "drone_quat_true", "drone_vel", "drone_in_tcp", "finger_contact", "grasped"):
         setattr(student, name, None)
+    if getattr(student, "base_state", None) is not None:  # privileged base state (Stewart teacher)
+        student.base_state = None
     student.drone_pose = ObsTerm(func=marker_drone_pose_b)
     student.history_length = STUDENT_HISTORY
     student.flatten_history_dim = True
