@@ -313,7 +313,8 @@ class DroneHoverControllerCfg(ActionTermCfg):
     the robot sends to its PX4 position controller (moving bases). None: the target stays in the world."""
 
     follow_z: bool = False
-    """Also follow the base's height change (PX4 can; off by default: the arm absorbs the base's vertical motion)."""
+    """Also follow the base's height change. Off: the drone follows in x and y only (user decision); the arm absorbs
+    the base's vertical motion."""
 
     follow_latency: float = 0.1
     """Delay of the base pose the drone receives [s] (link plus PX4 setpoint handling; assumed)."""
