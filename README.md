@@ -112,6 +112,21 @@ features (`rerun`, `wandb`, `skrl`, ...), pass the matching extra from `pyprojec
 
 <br>
 
+### Task variants
+
+| Task | What |
+|---|---|
+| `DroneGraspRl-Grasp-UR5` | fixed base on a table (the teacher's task) |
+| `DroneGraspRl-Grasp-UR5-Record` | + wrist camera and visual randomization, for `record_demos.py` |
+| `DroneGraspRl-Grasp-UR5-Stewart` / `-Stewart-Record` | the UR5 on the closed-loop Stewart platform (IK-driven legs) |
+| `DroneGraspRl-Grasp-UR5-Husky` / `-Husky-Record` | the UR5 on a Husky driving back and forth |
+| `DroneGraspRl-Grasp-UR5-Student` | + a deployable `student` observation (ArUco marker drone pose); distillation (`rsl_rl_distillation_cfg_entry_point`) and RL fine-tuning (`rsl_rl_student_ppo_cfg_entry_point`) |
+
+Design notes (Korean): [docs/moving_base_and_student.md](docs/moving_base_and_student.md),
+[docs/marker_study.md](docs/marker_study.md).
+
+<br>
+
 ## Project structure
 
 The RL design (observations, actions, rewards, judge, training history) is documented in Korean in
@@ -138,6 +153,10 @@ scripts/
 ├── check_hover.py           # drone flight controller: hover tracking per preset, recovery after a push
 ├── check_wrist_camera.py    # recording task: wrist camera images with the projected TCP and drone
 ├── record_demos.py          # teacher rollouts -> intermediate episode folders (wrist images, state, action)
+├── study_aruco.py           # ArUco markers on the drone: detection rate and error from rendered wrist images
+├── build_stewart_usd.py, check_stewart.py   # closed-loop Stewart platform asset and tracking check
+├── build_husky_rail_usd.py  # Husky carriage on a driven rail
+├── student_to_ppo.py        # distilled student -> PPO checkpoint for RL fine-tuning
 └── fix_isaacsim_fastfinder.sh, list_envs.py
 tools/lerobot_export/  # intermediate folders -> LeRobot v2.1 (own uv project, lerobot 0.3.3)
 tests/                 # registration test
