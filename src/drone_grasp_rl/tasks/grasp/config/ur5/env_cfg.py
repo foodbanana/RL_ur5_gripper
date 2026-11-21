@@ -266,23 +266,30 @@ class UR5GraspStudentEnvCfg(UR5GraspEnvCfg):
     keeps its ``policy`` group (52 entries with the simulator-only state).
     """
 
-    STUDENT_HISTORY = 3
-
     def __post_init__(self):
         super().__post_init__()
-        import copy
+        _add_student_obs(self)
 
-        from isaaclab.managers import ObservationTermCfg as ObsTerm
 
-        from .camera import marker_drone_pose_b
+STUDENT_HISTORY = 3
 
-        student = copy.deepcopy(self.observations.policy)
-        for name in ("drone_pos_true", "drone_quat_true", "drone_vel", "drone_in_tcp", "finger_contact", "grasped"):
-            setattr(student, name, None)
-        student.drone_pose = ObsTerm(func=marker_drone_pose_b)
-        student.history_length = self.STUDENT_HISTORY
-        student.flatten_history_dim = True
-        self.observations.student = student
+
+def _add_student_obs(cfg):
+    """The deployable ``student`` group: the policy group without the simulator-only entries, the ArUco marker drone
+    pose instead of mocap (base IMU kept on moving bases), over the last ``STUDENT_HISTORY`` policy steps."""
+    import copy
+
+    from isaaclab.managers import ObservationTermCfg as ObsTerm
+
+    from .camera import marker_drone_pose_b
+
+    student = copy.deepcopy(cfg.observations.policy)
+    for name in ("drone_pos_true", "drone_quat_true", "drone_vel", "drone_in_tcp", "finger_contact", "grasped"):
+        setattr(student, name, None)
+    student.drone_pose = ObsTerm(func=marker_drone_pose_b)
+    student.history_length = STUDENT_HISTORY
+    student.flatten_history_dim = True
+    cfg.observations.student = student
 
 
 @configclass
@@ -363,3 +370,21 @@ class UR5GraspHuskyRecordEnvCfg(UR5GraspHuskyEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         _setup_recording(self)
+
+
+@configclass
+class UR5GraspStewartStudentEnvCfg(UR5GraspStewartEnvCfg):
+    """:class:`UR5GraspStewartEnvCfg` with the deployable ``student`` group (marker drone pose, base IMU)."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        _add_student_obs(self)
+
+
+@configclass
+class UR5GraspHuskyStudentEnvCfg(UR5GraspHuskyEnvCfg):
+    """:class:`UR5GraspHuskyEnvCfg` with the deployable ``student`` group (marker drone pose, base IMU)."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        _add_student_obs(self)
