@@ -235,10 +235,10 @@ class UR5GraspStewartEnvCfg(UR5GraspEnvCfg):
         self.actions.base_motion = mdp.StewartMotionCfg(
             asset_name="stewart",
             leg_joint_names=STEWART_LEG_JOINTS,
-            # small and mid only (user decision 2026-11-22): with the platform moving from the start, big (x, z
-            # +-15 cm, roll / pitch +-6 deg, the base up to 0.3 m/s) pushed the drone away in most approaches, and the
-            # drone follows the base in x and y only (following z was rejected)
-            preset_weights={"small": 1.0, "mid": 1.0},
+            # mostly small and mid, a little big (user decision 2026-11-22: big kept to see it, about 11 %): with the
+            # platform moving from the start, big (x, z +-15 cm, roll / pitch +-6 deg, the base up to 0.3 m/s)
+            # pushed the drone away in most approaches; the drone follows the base in x and y only (not z)
+            preset_weights={"small": 1.0, "mid": 1.0, "big": 0.25},
         )
         self.actions.drone_hover.follow_asset = "robot"
         mount = BODY_PRIM_PATHS[BASE_BODY_NAME]
