@@ -43,6 +43,9 @@ parser.add_argument("--checkpoint", type=str, required=True)
 parser.add_argument("--num_envs", type=int, default=128)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--hover", type=str, default="mid", help="Hover preset: static, small, mid, big.")
+parser.add_argument(
+    "--agent", type=str, default="rsl_rl_cfg_entry_point", help="Agent config entry point of the task (runner type)."
+)
 parser.add_argument("--base_preset", type=str, default=None, help="Moving-base tasks: one motion preset at full size.")
 parser.add_argument("--no_dr", action="store_true", help="Evaluate without the domain randomization.")
 parser.add_argument(
@@ -100,7 +103,7 @@ def main():
     from drone_grasp_rl.tasks.grasp.mdp.judge import APPROACH, FAIL_REASONS, HELD, get_judge
 
     torch.manual_seed(args_cli.seed)
-    env_cfg, agent_cfg = resolve_task_config(TASK, "rsl_rl_cfg_entry_point")
+    env_cfg, agent_cfg = resolve_task_config(TASK, args_cli.agent)
     agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, check_rsl_rl_version())
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.events.reset_drone.params["near_fraction"] = 0.0  # the 25 reference positions only, no curriculum
