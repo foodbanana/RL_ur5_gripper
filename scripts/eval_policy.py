@@ -47,6 +47,9 @@ parser.add_argument(
     "--agent", type=str, default="rsl_rl_cfg_entry_point", help="Agent config entry point of the task (runner type)."
 )
 parser.add_argument("--base_preset", type=str, default=None, help="Moving-base tasks: one motion preset at full size.")
+parser.add_argument(
+    "--student_history", type=int, default=None, help="Student tasks: history length of the student group."
+)
 parser.add_argument("--no_dr", action="store_true", help="Evaluate without the domain randomization.")
 parser.add_argument(
     "--camera_view",
@@ -111,6 +114,8 @@ def main():
     if args_cli.base_preset is not None:  # one base motion preset at full amplitude, no ramp
         env_cfg.actions.base_motion.preset_weights = {args_cli.base_preset: 1.0}
         env_cfg.curriculum.base_motion.params.update(initial=1.0, final=1.0)
+    if args_cli.student_history is not None:
+        env_cfg.observations.student.history_length = args_cli.student_history
     if args_cli.no_dr:
         env_cfg.disable_randomization()
     env_cfg.seed = args_cli.seed
