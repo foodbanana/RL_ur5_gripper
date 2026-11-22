@@ -151,8 +151,11 @@ def forward_kinematics(
         jac = torch.stack(
             [(leg_lengths(x + eye[k], b, p) - leg_lengths(x - eye[k], b, p)) / (2 * eps) for k in range(6)], -1
         )
-        # damped least squares: a singular Jacobian (degenerate guess, bad input) must not stop the batch
+        # damped least squares, never raising: a singular or non-finite system (degenerate guess, bad input) must not
+        # stop the batch; such rows take no step and fall back below. Steps are clamped to 0.2 (m, rad).
         jt = jac.transpose(-1, -2)
-        x = x - torch.linalg.solve(jt @ jac + 1e-8 * torch.eye(6, device=x.device), (jt @ f.unsqueeze(-1))).squeeze(-1)
+        step, _ = torch.linalg.solve_ex(jt @ jac + 1e-8 * torch.eye(6, device=x.device), jt @ f.unsqueeze(-1))
+        step = torch.nan_to_num(step.squeeze(-1), nan=0.0, posinf=0.0, neginf=0.0).clamp(-0.2, 0.2)
+        x = x - step
     # anything that did not converge to a finite pose falls back to the center pose
     return torch.where(torch.isfinite(x).all(dim=-1, keepdim=True), x, torch.zeros_like(x))
