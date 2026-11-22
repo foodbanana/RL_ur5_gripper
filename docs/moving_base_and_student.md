@@ -198,6 +198,21 @@ mid 155 mm/s·74 mm·3.8°, big 310 mm/s·149 mm·7.7°.
 | Husky 정지 | – → 15 | 16 → 16 |
 | Husky 움직임 | 11 → 14 | 4 → **16** |
 
+**기존 PhysX 정책을 새 구조에서 평가** (256회씩, mid hover; Stewart는 seed 2 프리셋별, Husky는 seed별)
+
+| 정책 | 이전 구조 | 새 구조 |
+|---|---|---|
+| Stewart 선생 `25i` small / mid / big | 99.2 / 94.1 / 64.1 % | 98.0 / 93.4 / 62.1 % |
+| Stewart 학생 `ss5` small / mid / big | 94.5 / 87.9 / 42.6 % | 94.5 / 87.1 / 38.7 % |
+| Husky 선생 `26a` seed 1 / 2 | 97.7 / 96.5 % | 96.1 / 96.5 % |
+| Husky 학생 `hs2` seed 1 / 2 / 3 / 4 | 94.1 / 95.7 / – / – % | 94.1 / 90.6 / 88.7 / 94.1 % (평균 91.9) |
+| **Husky 학생 `hs3_husky_mounted`** (hs2에서 새 구조로 RL 600 it) | | 90.2 / 94.9 / 93.4 / 94.5 % (평균 93.3) → 채택 |
+| 고정 베이스 선생 `20b` seed 2 | 93.4 % | 93.4 % (같음) |
+
+- 관절은 이름으로 고르므로 정책을 그대로 쓸 수 있음. 차이는 대부분 256회 평가의 통계 오차(95% 구간 ±3~6%p) 안
+- Husky 학생만 4개 seed 평균 약 3%p 낮아(대부분 slip) 새 구조에서 이어서 학습 → 93.3 %
+- Stewart 선생·학생은 그대로 둠(학생 big은 다음 과제 "Stewart 학생 big 개선"에서 다시 학습)
+
 - 같은 하나의 articulation이라도 Stewart가 움직일 때 다리 힘은 PhysX와 Newton이 크게 다름(RMS 500~1000 N): 마운트 방식이 아니라 엔진 차이
 - 삭제한 것: `mdp.attach_robot_to_base`, `mdp.SoftMount`, `spawn_mount_joint`, `grasp_env.GraspRLEnv`(Newton 충돌 필터 hook) —
   하나의 articulation에서는 필요 없음. 시험 코드는 커밋하지 않음
