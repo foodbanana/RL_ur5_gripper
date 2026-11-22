@@ -180,5 +180,6 @@ mid 155 mm/s·74 mm·3.8°, big 310 mm/s·149 mm·7.7°.
 
 ## 8. 앞으로 할 것: 보고서용 장면 영상
 - 손목 카메라 영상은 녹화 데이터에서 바로 만듦 (`tools/lerobot_export/make_report_videos.py`, `outputs/report_videos/`)
-- **밖에서 본 장면 영상**(로봇·드론·Stewart/Husky 전체)은 렌더링에 GPU가 필요해 학습이 끝난 뒤 만든다
-  (`isaaclab play ... --video` 또는 고정 시점 카메라로 녹화)
+- **밖에서 본 장면 영상**: `scripts/render_scene_video.py`(녹화 태스크에 고정 시점 카메라를 더해 PNG로 저장) →
+  `tools/lerobot_export/frames_to_mp4.py`(H.264). `isaaclab play --video`는 MoviePy가 필요해 쓰지 않음.
+  `outputs/report_videos/scene_{fixed,husky,stewart_small,stewart_mid,stewart_big}.mp4` (1280×720, 30 fps, 11 s)
