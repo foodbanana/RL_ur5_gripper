@@ -168,3 +168,12 @@ mid 155 mm/s·74 mm·3.8°, big 310 mm/s·149 mm·7.7°.
   단 한 방향이라 로봇 무게가 베이스에 실리지 않음(Husky는 레일이 단단해 영향 작음). 스프링-댐퍼 방식은 root가 가벼워(5 kg) 불안정
 - **남은 문제:** 이 상태에서 스크립트 전문가의 잡기가 판정되지 않음(정지 베이스에서도 손가락이 3~13°에서 멈추고 시간 초과).
   root 상태를 매 스텝 쓰는 것이 그리퍼·접촉을 흔드는 것으로 추정. PhysX는 그대로 동작
+
+<br>
+
+## 7. 앞으로 확인할 것: 실물 Stewart 제어기
+- **회전 순서와 각도 단위:** sim의 IK·FK는 Rz·Ry·Rx(yaw·pitch·roll, rad)로, daniel-s-ingram/stewart `ik.cpp`와 같다.
+  mlayek21/Stewart-Platform은 Rx·Ry·Rz(도 단위)를 쓴다. 실물 제어기가 쓰는 순서와 단위에 맞춰야 실물에서 같은 동작이 나온다
+- **실물 치수:** 부착점 반지름·각도, 다리 행정·속도·힘 (지금은 기존 레포의 sim용 설계값과 가정값)
+- 참고 코드: https://github.com/daniel-s-ingram/stewart , https://github.com/mlayek21/Stewart-Platform (둘 다 IK만 있고 FK는 없음)
+- IK·FK 구현을 바꿀 때는 먼저 협의한다
