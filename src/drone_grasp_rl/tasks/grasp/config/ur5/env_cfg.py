@@ -206,6 +206,7 @@ def _mount_robot(cfg, base_asset: str, base_body: str, **params):
       writes the mount pose to it every physics step: for a fixed root Newton writes the root joint's parent
       transform (``model.joint_X_p``; MuJoCo moves the root like a mocap body). A floating root written every step
       fell under gravity within each step (0.4 mm, 0.06 m/s) and the shaking gripper never stalled on the drone.
+      The robot-to-base collision filter (``filtered_robot_bodies``) is added by ``grasp_env.GraspRLEnv``.
     """
     cfg.events.attach_robot = preset(
         default=EventTerm(func=mdp.attach_robot_to_base, mode="prestartup", params=dict(params)),
@@ -218,6 +219,8 @@ def _mount_robot(cfg, base_asset: str, base_body: str, **params):
             base_body_name=base_body,
             mount_pos=params.get("mount_pos", (0.0, 0.0, 0.0)),
             mount_yaw_deg=params.get("mount_yaw_deg", 0.0),
+            base_body_path=params["base_body_path"],
+            filtered_robot_bodies=list(params.get("filtered_robot_bodies", [])),
         ),
     )
 

@@ -536,6 +536,11 @@ class SoftMountCfg(ActionTermCfg):
     mount_yaw_deg: float = 0.0
     mode: str = "kinematic"
     """``"kinematic"`` (root set to the mount every physics step) or ``"spring"`` (wrench; was unstable)."""
+    base_body_path: str = ""
+    """Base body prim path relative to the environment (e.g. ``Stewart/top_plate``), for the collision filter."""
+    filtered_robot_bodies: list[str] = []
+    """Robot body prim paths (relative to the environment) not to collide with the base body, as on PhysX
+    (:func:`attach_robot_to_base`); applied by :class:`~drone_grasp_rl.tasks.grasp.grasp_env.GraspRLEnv`."""
     kp: float = 2.0e5
     kd: float = 4.0e3
     kp_rot: float = 2.0e4

@@ -192,8 +192,15 @@ mid 155 mm/s·74 mm·3.8°, big 310 mm/s·149 mm·7.7°.
 - 한계: 한 방향 연결이라 로봇 무게·반력이 베이스에 실리지 않는다
 - 진단 주의: 학습용 태스크는 커리큘럼이 진폭 0에서 시작 → 움직이는 베이스를 보려면 `env.curriculum.base_motion.params.initial=1.0`
 - 측정(정지 Stewart, 다리 6개 힘 합): PhysX 547.8 N, Newton 282.2 N → 차이 266 N ≈ 로봇 무게(22.6 kg). **PhysX는 팔 무게·반력이
-  베이스에 실리고(팔을 흔들면 ±150 N), Newton은 안 실림.** Newton에서 팔을 흔들 때 변하는 힘은 팔-윗판 접촉으로 추정(PhysX의
-  FilteredPairs가 Newton에는 없음, 미확인)
+  베이스에 실리고(어깨 두 관절을 흔들면 408~706 N), Newton은 안 실림**(어깨 회전만 흔들면 282.2~282.3 N으로 그대로)
+- **로봇-베이스 충돌 끄기 (2026-11-23)**: PhysX는 `attach_robot_to_base`가 로봇 마운트·base_link ↔ 베이스 몸체에 `FilteredPairsAPI`를 씀.
+  Newton importer는 asset마다 따로 읽어서 asset 사이 쌍을 잃음 → `tasks/grasp/grasp_env.py`의 `GraspRLEnv`가 Isaac Lab 공식 hook
+  (`isaaclab_newton.cloner.newton_builder_world_hook`)으로 환경마다 같은 쌍을 추가. 모든 태스크의 entry point를 `GraspRLEnv`로 바꿈
+  (PhysX·고정 베이스에서는 그냥 `ManagerBasedRLEnv`). 대상은 PhysX와 같이 `SoftMountCfg.filtered_robot_bodies`(Stewart: 마운트·base_link ↔
+  윗판, Husky: 없음 — PhysX도 없음). 확인: Newton 모델에 쌍이 들어감, 정지 Stewart·Husky 스크립트 16/16, PhysX 결과 변경 없음
+  (고정 베이스 스크립트 15/16 변경 전후 같음, 25i mid 241/256 같음)
+- 이전에 "Newton에서 팔을 흔들 때 다리 힘이 바뀜(282 → 최대 약 1000 N)"으로 본 것은 접촉 때문이 아님: 어깨·윗팔까지 윗판과 충돌을 꺼도
+  같았고, 팔이 드론을 쳐서 에피소드가 끝나기(drone_knocked) 한두 스텝 전에만 나타남. 그 순간 힘이 어디로 전달되는지는 **미확인**
 
 #### 앞으로 (Newton 양방향 연결, 팔은 별도 asset 유지가 조건)
 | 후보 | 내용 | 비고 |
