@@ -191,8 +191,18 @@ mid 155 mm/s·74 mm·3.8°, big 310 mm/s·149 mm·7.7°.
 - 남은 차이(움직일 때, 대부분 드론 밀림): mocap 몸체는 접촉 계산에서 속도가 0이라서라고 추정(**미확인**)
 - 한계: 한 방향 연결이라 로봇 무게·반력이 베이스에 실리지 않는다
 - 진단 주의: 학습용 태스크는 커리큘럼이 진폭 0에서 시작 → 움직이는 베이스를 보려면 `env.curriculum.base_motion.params.initial=1.0`
-- 앞으로: 시작할 때 "베이스 USD + 팔 USD + 고정 조인트"를 코드로 articulation 하나로 합치는 spawner(팔 교체 유지, Newton 완전 지원),
-  또는 Isaac Lab이 asset 사이 조인트를 지원하면 그쪽으로
+- 측정(정지 Stewart, 다리 6개 힘 합): PhysX 547.8 N, Newton 282.2 N → 차이 266 N ≈ 로봇 무게(22.6 kg). **PhysX는 팔 무게·반력이
+  베이스에 실리고(팔을 흔들면 ±150 N), Newton은 안 실림.** Newton에서 팔을 흔들 때 변하는 힘은 팔-윗판 접촉으로 추정(PhysX의
+  FilteredPairs가 Newton에는 없음, 미확인)
+
+#### 앞으로 (Newton 양방향 연결, 팔은 별도 asset 유지가 조건)
+| 후보 | 내용 | 비고 |
+|---|---|---|
+| ① 반력 되돌려 주기 | 지금처럼 고정 root로 옮기고, root 조인트가 받는 힘(joint wrench)을 읽어 반대로 윗판에 가함 | 변경 가장 작음. 1스텝 늦음, 안정성 확인 필요 |
+| ② MuJoCo weld 등식 | Isaac Lab cloner의 world builder hook에서 로봇 root와 윗판 사이에 weld equality 추가(Stewart 고리처럼) | 양방향, 약간 soft. hook이 공개 API인지 확인 필요 |
+| ③ 시작할 때 자동 합치기 | spawner가 "베이스 USD + 팔 USD + 고정 조인트"를 articulation 하나로 합침 (손으로 만든 통합 USD 아님) | 가장 정확, 작업 큼. 관절 순서가 바뀜 |
+| ④ Isaac Lab 업데이트 | cloner가 asset 사이 조인트를 지원하면(Newton에는 `parent_body`가 있음) 지금 구조 그대로 | 대기 |
+- 함께: Newton에서 로봇-베이스 충돌 끄기(PhysX FilteredPairs와 같게) — 작은 수정, 먼저 할 것
 
 <br>
 
