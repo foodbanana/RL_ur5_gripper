@@ -132,3 +132,27 @@ class SineMotion:
 
     def velocity(self, t: torch.Tensor, dt: float = 1e-3) -> torch.Tensor:
         return (self.pose(t + dt) - self.pose(t - dt)) / (2 * dt)
+
+
+def forward_kinematics(
+    lengths: torch.Tensor, b: torch.Tensor, p: torch.Tensor, guess: torch.Tensor | None = None, iterations: int = 4
+) -> torch.Tensor:
+    """Top-plate pose (N, 6) = x, y, z offset from the center pose, roll, pitch, yaw from the six leg lengths (N, 6),
+    by Newton-Raphson on :func:`leg_lengths` (numerical Jacobian) from ``guess`` (default: the center pose).
+
+    A real Stewart controller has the leg lengths (actuator encoders), so this pose is available on the robot. From
+    the previous step's estimate a few iterations converge to well below a micrometer.
+    """
+    x = torch.zeros(lengths.shape[0], 6, device=lengths.device) if guess is None else guess.clone()
+    eps = 1e-5
+    eye = torch.eye(6, device=lengths.device) * eps
+    for _ in range(iterations):
+        f = leg_lengths(x, b, p) - lengths  # (N, 6)
+        jac = torch.stack(
+            [(leg_lengths(x + eye[k], b, p) - leg_lengths(x - eye[k], b, p)) / (2 * eps) for k in range(6)], -1
+        )
+        # damped least squares: a singular Jacobian (degenerate guess, bad input) must not stop the batch
+        jt = jac.transpose(-1, -2)
+        x = x - torch.linalg.solve(jt @ jac + 1e-8 * torch.eye(6, device=x.device), (jt @ f.unsqueeze(-1))).squeeze(-1)
+    # anything that did not converge to a finite pose falls back to the center pose
+    return torch.where(torch.isfinite(x).all(dim=-1, keepdim=True), x, torch.zeros_like(x))

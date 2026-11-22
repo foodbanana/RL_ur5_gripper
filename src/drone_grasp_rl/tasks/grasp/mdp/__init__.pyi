@@ -13,6 +13,7 @@ __all__ = [
     "base_imu",
     "base_state",
     "ramp_base_motion",
+    "stewart_fk_state",
     "HOVER_PRESETS",
     "DroneHoverController",
     "DroneHoverControllerCfg",
@@ -83,6 +84,7 @@ from .base_motion import (
     base_imu,
     base_state,
     ramp_base_motion,
+    stewart_fk_state,
 )
 from .curriculums import ramp_reward_weight
 from .drone_control import HOVER_PRESETS, DroneHoverController, DroneHoverControllerCfg, drone_target_pos_b

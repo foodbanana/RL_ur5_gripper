@@ -394,3 +394,44 @@ def base_state(env: ManagerBasedEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg(
     disp = data.root_pos_w.torch - start
     grav = math_utils.quat_apply_inverse(quat, torch.tensor([0.0, 0.0, -1.0], device=env.device).expand_as(lin))
     return torch.cat([lin, ang, disp, grav], dim=-1)
+
+
+class stewart_fk_state(ManagerTermBase):
+    """Stewart top-plate pose and velocity from the measured leg lengths by forward kinematics, shape (N, 12):
+    x, y, z offset [m] and roll, pitch, yaw [rad] from the center pose, then their rates per second.
+
+    Deployable: the platform controller reads its six actuator encoders (``noise`` [m] per leg, assumed) and solves
+    the forward kinematics (``assets/stewart.py``); rates by finite difference over the policy step. This is what the
+    student gets in place of the teacher's privileged ``base_state``.
+    """
+
+    def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedEnv):
+        super().__init__(cfg, env)
+        self._b, self._p = st.anchors(env.device)
+        self._l0 = st.nominal_leg_length()
+        asset = env.scene[cfg.params.get("asset_name", "stewart")]
+        self._legs = [asset.joint_names.index(j) for j in cfg.params["leg_joint_names"]]
+        self._pose = torch.zeros(env.num_envs, 6, device=env.device)
+        self._prev = torch.zeros(env.num_envs, 6, device=env.device)
+        self._valid = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+
+    def reset(self, env_ids: Sequence[int] | None = None):
+        ids = _to_index(env_ids, self.device)
+        self._valid[ids] = False
+        self._pose[ids] = 0.0
+
+    def __call__(
+        self,
+        env: ManagerBasedEnv,
+        leg_joint_names: list[str],
+        asset_name: str = "stewart",
+        noise: float = 1.0e-4,
+    ) -> torch.Tensor:
+        lengths = env.scene[asset_name].data.joint_pos.torch[:, self._legs] + self._l0
+        lengths = torch.nan_to_num(lengths + noise * torch.randn_like(lengths), nan=self._l0)
+        guess = torch.where(self._valid[:, None], self._pose, torch.zeros_like(self._pose))
+        self._pose = st.forward_kinematics(lengths, self._b, self._p, guess=guess)
+        rate = torch.where(self._valid[:, None], (self._pose - self._prev) / env.step_dt, torch.zeros_like(self._pose))
+        self._prev = self._pose.clone()
+        self._valid[:] = True
+        return torch.cat([self._pose, rate], dim=-1)

@@ -392,11 +392,21 @@ class UR5GraspHuskyRecordEnvCfg(UR5GraspHuskyEnvCfg):
 
 @configclass
 class UR5GraspStewartStudentEnvCfg(UR5GraspStewartEnvCfg):
-    """:class:`UR5GraspStewartEnvCfg` with the deployable ``student`` group (marker drone pose, base IMU)."""
+    """:class:`UR5GraspStewartEnvCfg` with the deployable ``student`` group (marker drone pose, base IMU) plus the
+    platform's top-plate pose and rates from its leg encoders by forward kinematics (``mdp.stewart_fk_state``), the
+    deployable counterpart of the teacher's privileged ``base_state``."""
 
     def __post_init__(self):
         super().__post_init__()
+        from isaaclab.managers import ObservationTermCfg as ObsTerm
+
+        from drone_grasp_rl.assets.bases import STEWART_LEG_JOINTS
+
         _add_student_obs(self)
+        # pose ~0.1 m / 0.1 rad and rates ~0.3 m/s: scaled to about unit size
+        self.observations.student.stewart_fk = ObsTerm(
+            func=mdp.stewart_fk_state, params={"leg_joint_names": STEWART_LEG_JOINTS}, scale=5.0
+        )
 
 
 @configclass
