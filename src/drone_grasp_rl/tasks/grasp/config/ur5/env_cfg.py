@@ -197,9 +197,16 @@ def _setup_recording(cfg):
 
 
 def _mount_robot(cfg, base_asset: str, base_body: str, **params):
-    """Fix the robot base to the moving base. PhysX: a prestartup event authors a fixed joint in every environment
-    (no replication). Newton (replication on): a stiff spring-damper "virtual weld" action term (``mdp.SoftMount``),
-    since Newton's per-asset model building drops a joint between two assets."""
+    """Fix the robot base to the moving base; the robot stays a separate asset, so other arms can be mounted.
+
+    - PhysX: a prestartup event authors a fixed joint in every environment (no replication), outside both
+      articulations.
+    - Newton (replication on): Isaac Lab 3.0's cloner builds each asset separately and drops a joint between two
+      assets. The robot is spawned with a fixed root (``fix_root_link`` preset in the task) and ``mdp.SoftMount``
+      writes the mount pose to it every physics step: for a fixed root Newton writes the root joint's parent
+      transform (``model.joint_X_p``; MuJoCo moves the root like a mocap body). A floating root written every step
+      fell under gravity within each step (0.4 mm, 0.06 m/s) and the shaking gripper never stalled on the drone.
+    """
     cfg.events.attach_robot = preset(
         default=EventTerm(func=mdp.attach_robot_to_base, mode="prestartup", params=dict(params)),
         newton_mjwarp=None,
@@ -244,7 +251,7 @@ class UR5GraspStewartEnvCfg(UR5GraspEnvCfg):
         scene.replicate_physics = preset(default=False, newton_mjwarp=True)
         scene.stewart = STEWART_CFG
         scene.robot = scene.robot.replace(
-            spawn=scene.robot.spawn.replace(fix_root_link=False),
+            spawn=scene.robot.spawn.replace(fix_root_link=preset(default=False, newton_mjwarp=True)),  # _mount_robot
             init_state=scene.robot.init_state.replace(pos=(0.0, 0.0, st.HEIGHT)),
         )
         drone_pos = scene.drone.init_state.pos
@@ -352,7 +359,7 @@ class UR5GraspHuskyEnvCfg(UR5GraspEnvCfg):
         yaw = math.radians(HUSKY_ROBOT_MOUNT_YAW_DEG)
         base = (HUSKY_ROBOT_MOUNT_POS[0], HUSKY_ROBOT_MOUNT_POS[1], HUSKY_BASE_HEIGHT + HUSKY_ROBOT_MOUNT_POS[2])
         scene.robot = scene.robot.replace(
-            spawn=scene.robot.spawn.replace(fix_root_link=False),
+            spawn=scene.robot.spawn.replace(fix_root_link=preset(default=False, newton_mjwarp=True)),  # _mount_robot
             init_state=scene.robot.init_state.replace(pos=base, rot=(0.0, 0.0, math.sin(yaw / 2), math.cos(yaw / 2))),
         )
         # the drone at the same base-relative place as on the table

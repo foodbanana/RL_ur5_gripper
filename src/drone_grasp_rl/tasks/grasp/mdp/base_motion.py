@@ -443,9 +443,13 @@ class SoftMount(ActionTerm):
     On PhysX the robot is fixed to the base by a joint outside both articulations (:func:`attach_robot_to_base`).
     Newton builds and clones its model per asset and drops a joint between two assets (the robot fell over).
 
-    ``mode="kinematic"`` (default): every physics step the robot's root is set to the mount pose and velocity. Exact,
-    but one-way: the robot's weight and reaction do not load the base (small for the stiffly driven Husky rail; the
-    Stewart legs then carry only the plate). ``mode="spring"``: a spring-damper wrench with the reaction on the base;
+    ``mode="kinematic"`` (default): every physics step the robot's root is set to the mount pose. Spawn the robot with
+    a **fixed root** (``fix_root_link=True``): Newton then writes the pose to the root joint's parent transform and
+    MuJoCo moves the root like a mocap body. With a floating root the robot fell under gravity within every physics
+    step (0.4 mm, 0.06 m/s, then set back): the gripper shook against the drone and no grasp was detected (scripted
+    expert 0/16 on a still base, 16/16 with the fixed root). Limits: one-way (the robot's weight does not load the
+    base), and a mocap root has no velocity in the contact solver (moving base: scripted expert 4-6/16 vs PhysX
+    11/16, cause not confirmed). ``mode="spring"``: a spring-damper wrench with the reaction on the base;
     with the light root body (5 kg, 0.01 kg m^2) gains stiff enough to hold the arm were unstable (NaN).
     """
 
@@ -487,7 +491,8 @@ class SoftMount(ActionTerm):
             pose = torch.cat([b_pose[:, :3] + r, math_utils.quat_mul(b_pose[:, 3:7], self._offset_q)], dim=-1)
             vel = torch.cat([b_lin + torch.linalg.cross(b_ang, r, dim=-1), b_ang], dim=-1)
             self._robot.write_root_link_pose_to_sim_index(root_pose=pose)
-            self._robot.write_root_link_velocity_to_sim_index(root_velocity=vel)
+            if self._robot.root_view.is_floating_base:  # a fixed root has no velocity state
+                self._robot.write_root_link_velocity_to_sim_index(root_velocity=vel)
             return
         b_pose = base.body_link_pose_w.torch[:, self._base_body]
         b_lin = base.body_link_lin_vel_w.torch[:, self._base_body]

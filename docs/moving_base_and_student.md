@@ -169,13 +169,30 @@ mid 155 mm/s·74 mm·3.8°, big 310 mm/s·149 mm·7.7°.
 - 이 경우 RL 미세조정은 오히려 나빠짐(학습 성공률 81%에서 정체 후 하락) → 증류 결과를 그대로 채택
 - 남은 차이(big 43% vs 64%)는 대부분 드론 밀림. 다음 후보: RNN 학생, DAgger 더 길게, big 비중을 올린 증류
 
-### Newton에서 움직이는 베이스 (일부 해결)
-- 원인: Newton은 asset(로봇, 드론, 베이스)마다 모델을 만들어 복제하는데, **서로 다른 asset을 잇는 조인트**(로봇 고정 조인트)는
-  모델에 들어가지 않는다 (USD에는 있지만 Newton 모델의 조인트 목록에 없음을 확인)
-- 대신 Newton에서는 `mdp.SoftMount`(kinematic): 매 물리 스텝 로봇 root를 베이스 위 고정 자세·속도로 맞춤 → 로봇이 넘어지는 문제 해결.
-  단 한 방향이라 로봇 무게가 베이스에 실리지 않음(Husky는 레일이 단단해 영향 작음). 스프링-댐퍼 방식은 root가 가벼워(5 kg) 불안정
-- **남은 문제:** 이 상태에서 스크립트 전문가의 잡기가 판정되지 않음(정지 베이스에서도 손가락이 3~13°에서 멈추고 시간 초과).
-  root 상태를 매 스텝 쓰는 것이 그리퍼·접촉을 흔드는 것으로 추정. PhysX는 그대로 동작
+### Newton에서 움직이는 베이스 (2026-11-23 원인 확인, 고정 root로 수정)
+- 구조: 로봇팔은 베이스와 **별도 asset**으로 둔다(여러 팔로 바꿔 끼우기 위해, 사용자 결정). PhysX는 asset 사이 고정 조인트
+  (`mdp.attach_robot_to_base`). Newton은 Isaac Lab 3.0 cloner가 asset마다 builder를 따로 만들어 합치므로
+  (`isaaclab_newton/cloner/newton_clone_utils.py`, `add_builder(asset, xform=...)`) asset 사이 조인트가 빠진다.
+  Newton 자체에는 `parent_body`(다른 몸체에 FIXED로 붙이기)가 있지만 Isaac Lab은 쓰지 않는다.
+  Isaac Lab의 이동 매니퓰레이터 예(`RIDGEBACK_FRANKA_PANDA_CFG`)는 베이스+팔을 articulation 하나로 만든다(팔 교체에 불리해서 채택 안 함)
+- 이전 방식: 로봇 root를 떠 있게(FREE 조인트, Newton USD import 기본값) 두고 `mdp.SoftMount`가 매 물리 스텝 자세·속도를 씀
+- **원인**: 한 물리 스텝 동안 root가 자유라 로봇 전체가 중력으로 떨어졌다가 다시 올려짐 → 스텝 직후 root가 마운트보다 0.4 mm 낮고
+  0.063 m/s(그리퍼 0.087 m/s)로 떨어지는 중. 그리퍼가 드론에 대해 120 Hz로 떨려서 판정(그리퍼 정지 + 양쪽 힘)이 안 됨
+- **수정**: Newton에서만 로봇을 `fix_root_link=True`로 spawn(`env_cfg.py` preset). 고정 root에 쓴 자세는 Newton이
+  `model.joint_X_p`에 쓰고 MuJoCo가 root를 mocap 몸체처럼 옮긴다 → 떨어짐 없음, 로봇이 마운트를 0.4 mm 이내로 따라감. PhysX는 그대로
+
+| 스크립트 전문가 (16회) | PhysX | Newton 이전 (floating) | **Newton 고정 root** |
+|---|---|---|---|
+| Husky 정지 | – | 0/16 | **16/16** |
+| Stewart 정지 | – | 4/16 | **16/16** |
+| Husky 움직임 | 11/16 | 0/16 | 4/16 |
+| Stewart 움직임 | 11/16 | 1/16 | 7/16 |
+
+- 남은 차이(움직일 때, 대부분 드론 밀림): mocap 몸체는 접촉 계산에서 속도가 0이라서라고 추정(**미확인**)
+- 한계: 한 방향 연결이라 로봇 무게·반력이 베이스에 실리지 않는다
+- 진단 주의: 학습용 태스크는 커리큘럼이 진폭 0에서 시작 → 움직이는 베이스를 보려면 `env.curriculum.base_motion.params.initial=1.0`
+- 앞으로: 시작할 때 "베이스 USD + 팔 USD + 고정 조인트"를 코드로 articulation 하나로 합치는 spawner(팔 교체 유지, Newton 완전 지원),
+  또는 Isaac Lab이 asset 사이 조인트를 지원하면 그쪽으로
 
 <br>
 
