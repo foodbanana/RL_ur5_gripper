@@ -171,9 +171,11 @@ def main():
             marker.reset()
             marker_rows = []  # (distance, holding, detected, age, position error [m])
 
+        from drone_grasp_rl.tasks.grasp.mdp.frames import base_lin_vel_w, base_pos_w, base_quat_w
+
         moving = "base_motion" in base.action_manager.active_terms
         if moving:  # how much the base moves while the policy approaches (is the motion relevant to the grasp?)
-            base_start = robot.data.root_pos_w.torch.clone()
+            base_start = base_pos_w(robot).clone()
             base_move = torch.zeros(n, 4, device=dev)  # max planar, max vertical [m], max speed [m/s], max tilt [rad]
             approach_time = torch.zeros(n, device=dev)
 
@@ -236,13 +238,13 @@ def main():
                     marker_rows.append(row[sel])
                 if moving:
                     appr = live & (judge.phase == APPROACH)
-                    d = robot.data.root_pos_w.torch - base_start
-                    up = math_utils.matrix_from_quat(robot.data.root_quat_w.torch)[..., 2, 2].clamp(-1.0, 1.0)
+                    d = base_pos_w(robot) - base_start
+                    up = math_utils.matrix_from_quat(base_quat_w(robot))[..., 2, 2].clamp(-1.0, 1.0)
                     now = torch.stack(
                         [
                             d[:, :2].norm(dim=-1),
                             d[:, 2].abs(),
-                            robot.data.root_lin_vel_w.torch.norm(dim=-1),
+                            base_lin_vel_w(robot).norm(dim=-1),
                             torch.acos(up),
                         ],
                         -1,

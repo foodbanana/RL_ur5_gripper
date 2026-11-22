@@ -22,6 +22,8 @@ import torch
 import isaaclab.utils.math as math_utils
 from isaaclab.managers import ManagerTermBase, SceneEntityCfg
 
+from .frames import base_quat_w
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
     from isaaclab.managers import ObservationTermCfg
@@ -157,7 +159,7 @@ class mocap_drone_pose_b(ManagerTermBase):
     ) -> torch.Tensor:
         pos, quat = frame_pose_b(env, frame_name, sensor_cfg)
         # velocities of the drone in the base frame
-        base_quat = env.scene[robot_cfg.name].data.root_quat_w.torch
+        base_quat = base_quat_w(env.scene[robot_cfg.name])
         drone = env.scene[drone_cfg.name]
         lin_vel = math_utils.quat_apply_inverse(base_quat, drone.data.root_lin_vel_w.torch)
         ang_vel = math_utils.quat_apply_inverse(base_quat, drone.data.root_ang_vel_w.torch)
@@ -202,7 +204,7 @@ def contact_forces(env: ManagerBasedEnv, sensor_names: list[str]) -> torch.Tenso
 
 def drone_vel_b(env: ManagerBasedEnv, robot_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
     """Exact drone linear [m/s] and angular [rad/s] velocity in the robot base frame, shape (N, 6)."""
-    base_quat = env.scene[robot_cfg.name].data.root_quat_w.torch
+    base_quat = base_quat_w(env.scene[robot_cfg.name])
     drone = env.scene["drone"]
     lin = math_utils.quat_apply_inverse(base_quat, drone.data.root_lin_vel_w.torch)
     ang = math_utils.quat_apply_inverse(base_quat, drone.data.root_ang_vel_w.torch)

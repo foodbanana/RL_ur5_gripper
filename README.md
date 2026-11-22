@@ -156,6 +156,7 @@ scripts/
 ├── study_aruco.py           # ArUco markers on the drone: detection rate and error from rendered wrist images
 ├── build_stewart_usd.py, check_stewart.py   # closed-loop Stewart platform asset and tracking check
 ├── build_husky_rail_usd.py  # Husky carriage on a driven rail
+├── build_mounted_robot_usd.py  # arm + moving base as one articulation (assets/data/mounted/); add an entry to mount another arm
 ├── student_to_ppo.py        # distilled student -> PPO checkpoint for RL fine-tuning
 └── fix_isaacsim_fastfinder.sh, list_envs.py
 tools/lerobot_export/  # intermediate folders -> LeRobot v2.1 (own uv project, lerobot 0.3.3)

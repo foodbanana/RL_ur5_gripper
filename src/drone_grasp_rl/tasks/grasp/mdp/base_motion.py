@@ -13,7 +13,6 @@ top plate (with the robot on it) moves where the legs push it.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Sequence
 from dataclasses import MISSING
 from typing import TYPE_CHECKING
@@ -27,6 +26,7 @@ from isaaclab.utils import configclass
 from drone_grasp_rl.assets import stewart as st
 
 from .actions import _to_index
+from .frames import base_ang_vel_w, base_lin_vel_w, base_pos_w, base_quat_w
 
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation
@@ -105,7 +105,7 @@ class StewartMotionCfg(ActionTermCfg):
     """Configuration of :class:`StewartMotion`."""
 
     class_type: type[ActionTerm] = StewartMotion
-    asset_name: str = "stewart"
+    asset_name: str = "robot"
     leg_joint_names: list[str] = MISSING
     preset_weights: dict[str, float] = {"mid": 1.0}
     """Probability of each motion preset (``assets/stewart.py`` ``MOTION_PRESETS``) per reset."""
@@ -208,7 +208,7 @@ class HuskyMotionCfg(ActionTermCfg):
     """Configuration of :class:`HuskyMotion`."""
 
     class_type: type[ActionTerm] = HuskyMotion
-    asset_name: str = "husky_rail"
+    asset_name: str = "robot"
     amplitude_scale: float = 1.0
     ramp_time: float = 1.0
     """[s] speed fade-in after each reset, which starts at a random point of the back-and-forth cycle."""
@@ -238,59 +238,16 @@ class base_imu(ManagerTermBase):
         gyro_std: float = 0.005,
         accel_std: float = 0.05,
     ) -> torch.Tensor:
-        data = env.scene[asset_cfg.name].data
-        quat = data.root_quat_w.torch
-        vel = data.root_lin_vel_w.torch
+        asset = env.scene[asset_cfg.name]
+        quat = base_quat_w(asset)
+        vel = base_lin_vel_w(asset)
         acc = torch.where(self._valid[:, None], (vel - self._prev) / env.step_dt, torch.zeros_like(vel))
         self._prev = vel.clone()
         self._valid[:] = True
         gravity = torch.tensor(env.sim.cfg.gravity, device=env.device)
         f_b = math_utils.quat_apply_inverse(quat, acc - gravity)
-        w_b = math_utils.quat_apply_inverse(quat, data.root_ang_vel_w.torch)
+        w_b = math_utils.quat_apply_inverse(quat, base_ang_vel_w(asset))
         return torch.cat([w_b + gyro_std * torch.randn_like(w_b), f_b + accel_std * torch.randn_like(f_b)], dim=-1)
-
-
-def attach_robot_to_base(
-    env: ManagerBasedEnv,
-    env_ids: torch.Tensor | None,
-    base_body_path: str,
-    robot_body_path: str,
-    filtered_robot_bodies: Sequence[str] = (),
-    joint_name: str = "RobotMount",
-    mount_pos: tuple[float, float, float] = (0.0, 0.0, 0.0),
-    mount_yaw_deg: float = 0.0,
-):
-    """Prestartup event: fix the robot's root body to the base's mount body with a joint outside both articulations
-    (as the data collection repo's moving-base scene does; inside, USD Physics parsing would pull the base into the
-    robot's articulation). The two bodies must already sit at the mount pose (``mount_pos``, ``mount_yaw_deg`` in the
-    base body's frame). Collisions between the base and the robot bodies that rest on it are filtered.
-
-    Paths are relative to each environment prim. Needs ``scene.replicate_physics = False`` (the joint is authored in
-    every environment, after cloning).
-    """
-    from pxr import Gf, UsdPhysics
-
-    import isaaclab.sim as sim_utils
-
-    stage = sim_utils.get_current_stage()
-    for i in range(env.num_envs):
-        root = f"/World/envs/env_{i}"
-        base, robot = f"{root}/{base_body_path}", f"{root}/{robot_body_path}"
-        if not stage.GetPrimAtPath(base) or not stage.GetPrimAtPath(robot):
-            # Newton clones the environments from env_0 in its model builder; only env_0 is on the USD stage
-            continue
-        joint = UsdPhysics.FixedJoint.Define(stage, f"{root}/{joint_name}")
-        joint.CreateBody0Rel().SetTargets([base])
-        joint.CreateBody1Rel().SetTargets([robot])
-        half = math.radians(mount_yaw_deg) / 2
-        joint.CreateLocalPos0Attr().Set(Gf.Vec3f(*[float(v) for v in mount_pos]))
-        joint.CreateLocalRot0Attr().Set(Gf.Quatf(math.cos(half), 0.0, 0.0, math.sin(half)))
-        joint.CreateLocalPos1Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
-        joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
-        joint.CreateExcludeFromArticulationAttr().Set(True)
-        for body in filtered_robot_bodies:
-            prim = stage.GetPrimAtPath(f"{root}/{body}")
-            UsdPhysics.FilteredPairsAPI.Apply(prim).CreateFilteredPairsRel().AddTarget(base)
 
 
 class ramp_base_motion(ManagerTermBase):
@@ -332,66 +289,22 @@ class ramp_base_motion(ManagerTermBase):
         return self._scale
 
 
-def spawn_mount_joint(prim_path: str, cfg: MountJointCfg, translation=None, orientation=None, **kwargs):
-    """Spawner (Newton): the robot mount joint in the source environment only, which Newton's model builder clones.
-
-    Same joint as :func:`attach_robot_to_base` (PhysX path), plus ``MjcEqualityWeldAPI`` with a stiff ``mjc:solref``:
-    Newton turns the excluded fixed joint into a MuJoCo WELD, whose default softness would let the robot sag.
-    """
-    from pxr import Gf, Sdf, UsdPhysics
-
-    import isaaclab.sim as sim_utils
-
-    stage = sim_utils.get_current_stage()
-    root = prim_path.rsplit("/", 1)[0]
-    base, robot = f"{root}/{cfg.base_body_path}", f"{root}/{cfg.robot_body_path}"
-    joint = UsdPhysics.FixedJoint.Define(stage, prim_path)
-    joint.CreateBody0Rel().SetTargets([base])
-    joint.CreateBody1Rel().SetTargets([robot])
-    half = math.radians(cfg.mount_yaw_deg) / 2
-    joint.CreateLocalPos0Attr().Set(Gf.Vec3f(*[float(v) for v in cfg.mount_pos]))
-    joint.CreateLocalRot0Attr().Set(Gf.Quatf(math.cos(half), 0.0, 0.0, math.sin(half)))
-    joint.CreateLocalPos1Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
-    joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
-    joint.CreateExcludeFromArticulationAttr().Set(True)
-    prim = joint.GetPrim()
-    if cfg.stiff_weld:
-        prim.AddAppliedSchema("MjcEqualityWeldAPI")
-        prim.CreateAttribute("mjc:solref", Sdf.ValueTypeNames.DoubleArray).Set([0.005, 1.0])
-        prim.CreateAttribute("mjc:solimp", Sdf.ValueTypeNames.DoubleArray).Set([0.95, 0.99, 0.001, 0.5, 2.0])
-    for body in cfg.filtered_robot_bodies:
-        UsdPhysics.FilteredPairsAPI.Apply(stage.GetPrimAtPath(f"{root}/{body}")).CreateFilteredPairsRel().AddTarget(
-            base
-        )
-    return prim
-
-
-@configclass
-class MountJointCfg:
-    """Spawn configuration of :func:`spawn_mount_joint` (paths relative to the environment prim)."""
-
-    func: object = spawn_mount_joint
-    base_body_path: str = MISSING
-    robot_body_path: str = MISSING
-    mount_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    mount_yaw_deg: float = 0.0
-    filtered_robot_bodies: list[str] = []
-    stiff_weld: bool = False
-    """Author ``MjcEqualityWeldAPI`` with a stiff solref (with it the robot fell over: the weld did not hold)."""
-    visible: bool = True
-
-
-def base_state(env: ManagerBasedEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+def base_state(
+    env: ManagerBasedEnv,
+    default_pos: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
     """Privileged moving-base state (teacher only), shape (N, 12): the robot base's linear and angular velocity in its
     own frame [m/s, rad/s], its displacement from the episode's start pose in the start frame's axes [m] and gravity
-    in the base frame (tilt). The base IMU alone gives angular velocity and acceleration, not where the base is or how
+    in the base frame (tilt); ``default_pos`` is the robot base's start position relative to the environment origin.
+    The base IMU alone gives angular velocity and acceleration, not where the base is or how
     fast it goes; the teacher plateaued at about 81 % success on the moving Stewart platform without them."""
-    data = env.scene[asset_cfg.name].data
-    quat = data.root_quat_w.torch
-    lin = math_utils.quat_apply_inverse(quat, data.root_lin_vel_w.torch)
-    ang = math_utils.quat_apply_inverse(quat, data.root_ang_vel_w.torch)
-    start = data.default_root_state.torch[:, :3] + env.scene.env_origins
-    disp = data.root_pos_w.torch - start
+    asset = env.scene[asset_cfg.name]
+    quat = base_quat_w(asset)
+    lin = math_utils.quat_apply_inverse(quat, base_lin_vel_w(asset))
+    ang = math_utils.quat_apply_inverse(quat, base_ang_vel_w(asset))
+    start = torch.tensor(default_pos, device=env.device) + env.scene.env_origins
+    disp = base_pos_w(asset) - start
     grav = math_utils.quat_apply_inverse(quat, torch.tensor([0.0, 0.0, -1.0], device=env.device).expand_as(lin))
     return torch.cat([lin, ang, disp, grav], dim=-1)
 
@@ -409,7 +322,7 @@ class stewart_fk_state(ManagerTermBase):
         super().__init__(cfg, env)
         self._b, self._p = st.anchors(env.device)
         self._l0 = st.nominal_leg_length()
-        asset = env.scene[cfg.params.get("asset_name", "stewart")]
+        asset = env.scene[cfg.params.get("asset_name", "robot")]
         self._legs = [asset.joint_names.index(j) for j in cfg.params["leg_joint_names"]]
         self._pose = torch.zeros(env.num_envs, 6, device=env.device)
         self._prev = torch.zeros(env.num_envs, 6, device=env.device)
@@ -424,7 +337,7 @@ class stewart_fk_state(ManagerTermBase):
         self,
         env: ManagerBasedEnv,
         leg_joint_names: list[str],
-        asset_name: str = "stewart",
+        asset_name: str = "robot",
         noise: float = 1.0e-4,
     ) -> torch.Tensor:
         lengths = env.scene[asset_name].data.joint_pos.torch[:, self._legs] + self._l0
@@ -435,113 +348,3 @@ class stewart_fk_state(ManagerTermBase):
         self._prev = self._pose.clone()
         self._valid[:] = True
         return torch.cat([self._pose, rate], dim=-1)
-
-
-class SoftMount(ActionTerm):
-    """Newton: keep the robot base on the moving base (mount pose ``mount_pos``, ``mount_yaw_deg`` in the base body).
-
-    On PhysX the robot is fixed to the base by a joint outside both articulations (:func:`attach_robot_to_base`).
-    Newton builds and clones its model per asset and drops a joint between two assets (the robot fell over).
-
-    ``mode="kinematic"`` (default): every physics step the robot's root is set to the mount pose. Spawn the robot with
-    a **fixed root** (``fix_root_link=True``): Newton then writes the pose to the root joint's parent transform and
-    MuJoCo moves the root like a mocap body. With a floating root the robot fell under gravity within every physics
-    step (0.4 mm, 0.06 m/s, then set back): the gripper shook against the drone and no grasp was detected (scripted
-    expert 0/16 on a still base, 16/16 with the fixed root). Limits: one-way (the robot's weight does not load the
-    base), and a mocap root has no velocity in the contact solver (moving base: scripted expert 4-6/16 vs PhysX
-    11/16, cause not confirmed). ``mode="spring"``: a spring-damper wrench with the reaction on the base;
-    with the light root body (5 kg, 0.01 kg m^2) gains stiff enough to hold the arm were unstable (NaN).
-    """
-
-    cfg: SoftMountCfg
-
-    def __init__(self, cfg: SoftMountCfg, env: ManagerBasedEnv):
-        super().__init__(cfg, env)
-        self._robot = env.scene[cfg.robot_name]
-        self._base_body = self._asset.body_names.index(cfg.base_body_name)
-        self._root_body = self._robot.body_names.index(cfg.robot_body_name)
-        n, dev = self.num_envs, self.device
-        self._offset = torch.tensor(cfg.mount_pos, device=dev).repeat(n, 1)
-        half = math.radians(cfg.mount_yaw_deg) / 2
-        self._offset_q = torch.tensor([0.0, 0.0, math.sin(half), math.cos(half)], device=dev).repeat(n, 1)
-
-    @property
-    def action_dim(self) -> int:
-        return 0
-
-    @property
-    def raw_actions(self) -> torch.Tensor:
-        return torch.zeros(self.num_envs, 0, device=self.device)
-
-    @property
-    def processed_actions(self) -> torch.Tensor:
-        return self.raw_actions
-
-    def process_actions(self, actions: torch.Tensor):
-        pass
-
-    def apply_actions(self):
-        cfg = self.cfg
-        base = self._asset.data
-        if cfg.mode == "kinematic":
-            b_pose = base.body_link_pose_w.torch[:, self._base_body]
-            b_lin = base.body_link_lin_vel_w.torch[:, self._base_body]
-            b_ang = base.body_link_ang_vel_w.torch[:, self._base_body]
-            r = math_utils.quat_apply(b_pose[:, 3:7], self._offset)
-            pose = torch.cat([b_pose[:, :3] + r, math_utils.quat_mul(b_pose[:, 3:7], self._offset_q)], dim=-1)
-            vel = torch.cat([b_lin + torch.linalg.cross(b_ang, r, dim=-1), b_ang], dim=-1)
-            self._robot.write_root_link_pose_to_sim_index(root_pose=pose)
-            if self._robot.root_view.is_floating_base:  # a fixed root has no velocity state
-                self._robot.write_root_link_velocity_to_sim_index(root_velocity=vel)
-            return
-        b_pose = base.body_link_pose_w.torch[:, self._base_body]
-        b_lin = base.body_link_lin_vel_w.torch[:, self._base_body]
-        b_ang = base.body_link_ang_vel_w.torch[:, self._base_body]
-        r = math_utils.quat_apply(b_pose[:, 3:7], self._offset)
-        t_pos = b_pose[:, :3] + r
-        t_quat = math_utils.quat_mul(b_pose[:, 3:7], self._offset_q)
-        t_vel = b_lin + torch.linalg.cross(b_ang, r, dim=-1)
-        rob = self._robot.data
-        pose = rob.body_link_pose_w.torch[:, self._root_body]
-        lin = rob.body_link_lin_vel_w.torch[:, self._root_body]
-        ang = rob.body_link_ang_vel_w.torch[:, self._root_body]
-        force = cfg.kp * (t_pos - pose[:, :3]) + cfg.kd * (t_vel - lin)
-        err = math_utils.axis_angle_from_quat(math_utils.quat_mul(t_quat, math_utils.quat_inv(pose[:, 3:7])))
-        torque = cfg.kp_rot * err + cfg.kd_rot * (b_ang - ang)
-        f_r = torch.zeros(self.num_envs, self._robot.num_bodies, 3, device=self.device)
-        t_r = torch.zeros_like(f_r)
-        f_r[:, self._root_body], t_r[:, self._root_body] = force, torque
-        self._robot.permanent_wrench_composer.set_forces_and_torques_index(forces=f_r, torques=t_r, is_global=True)
-        f_b = torch.zeros(self.num_envs, self._asset.num_bodies, 3, device=self.device)
-        t_b = torch.zeros_like(f_b)
-        # reaction at the mount point, expressed about the base body's origin
-        f_b[:, self._base_body] = -force
-        t_b[:, self._base_body] = -torque - torch.linalg.cross(r, force, dim=-1)
-        self._asset.permanent_wrench_composer.set_forces_and_torques_index(forces=f_b, torques=t_b, is_global=True)
-
-    def reset(self, env_ids: Sequence[int] | None = None) -> None:
-        pass
-
-
-@configclass
-class SoftMountCfg(ActionTermCfg):
-    """Configuration of :class:`SoftMount` (``asset_name`` = the moving base articulation)."""
-
-    class_type: type[ActionTerm] = SoftMount
-    asset_name: str = MISSING
-    base_body_name: str = MISSING
-    robot_name: str = "robot"
-    robot_body_name: str = "robot_mount"
-    mount_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    mount_yaw_deg: float = 0.0
-    mode: str = "kinematic"
-    """``"kinematic"`` (root set to the mount every physics step) or ``"spring"`` (wrench; was unstable)."""
-    base_body_path: str = ""
-    """Base body prim path relative to the environment (e.g. ``Stewart/top_plate``), for the collision filter."""
-    filtered_robot_bodies: list[str] = []
-    """Robot body prim paths (relative to the environment) not to collide with the base body, as on PhysX
-    (:func:`attach_robot_to_base`); applied by :class:`~drone_grasp_rl.tasks.grasp.grasp_env.GraspRLEnv`."""
-    kp: float = 2.0e5
-    kd: float = 4.0e3
-    kp_rot: float = 2.0e4
-    kd_rot: float = 4.0e2

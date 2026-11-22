@@ -243,7 +243,9 @@ def main():
             )
         )
         # 6. grasp: drone waist at the TCP, at rest, same orientation as the base
-        base_pos, base_quat = robot.data.root_pos_w.torch, robot.data.root_quat_w.torch
+        from drone_grasp_rl.tasks.grasp.mdp.frames import base_pos_w, base_quat_w
+
+        base_pos, base_quat = base_pos_w(robot), base_quat_w(robot)
         tcp_w = base_pos + math_utils.quat_apply(base_quat, tcp_b())
         drone.write_root_pose_to_sim_index(root_pose=torch.cat([tcp_w, base_quat], dim=-1))
         drone.write_root_velocity_to_sim_index(root_velocity=torch.zeros(n, 6, device=dev))

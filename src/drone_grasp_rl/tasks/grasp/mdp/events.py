@@ -14,6 +14,8 @@ import torch
 import isaaclab.utils.math as math_utils
 from isaaclab.managers import ManagerTermBase, SceneEntityCfg
 
+from .frames import base_pos_w, base_quat_w
+
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation
     from isaaclab.envs import ManagerBasedEnv
@@ -96,8 +98,8 @@ class reset_drone_at_targets(ManagerTermBase):
         self.near_start[env_ids] = near
         self.reset_pos_b[env_ids] = pos_b
 
-        base_pos = robot.data.root_pos_w.torch[env_ids]
-        base_quat = robot.data.root_quat_w.torch[env_ids]
+        base_pos = base_pos_w(robot)[env_ids]
+        base_quat = base_quat_w(robot)[env_ids]
         pos_w = base_pos + math_utils.quat_apply(base_quat, pos_b)
 
         drone.write_root_pose_to_sim_index(root_pose=torch.cat([pos_w, base_quat], dim=-1), env_ids=env_ids)

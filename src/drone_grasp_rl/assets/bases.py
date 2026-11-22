@@ -35,7 +35,7 @@ STEWART_CFG = ArticulationCfg(
             NewtonArticulationCfg(self_collision_enabled=False),
         ],
     ),
-    init_state=ArticulationCfg.InitialStateCfg(pos=(0.0, 0.0, 0.0)),
+    init_state=ArticulationCfg.InitialStateCfg(pos=(0.0, 0.0, 0.0), joint_pos={"leg_.*": 0.0}),
     actuators={
         "legs": ImplicitActuatorCfg(
             joint_names_expr=STEWART_LEG_JOINTS,
@@ -81,7 +81,7 @@ HUSKY_RAIL_CFG = ArticulationCfg(
             NewtonArticulationCfg(self_collision_enabled=False),
         ],
     ),
-    init_state=ArticulationCfg.InitialStateCfg(pos=(0.0, 0.0, HUSKY_BASE_HEIGHT)),
+    init_state=ArticulationCfg.InitialStateCfg(pos=(0.0, 0.0, HUSKY_BASE_HEIGHT), joint_pos={HUSKY_DRIVE_JOINT: 0.0}),
     actuators={
         # stiff position servo: the carriage follows the trajectory (kinematic in the data collection repo)
         "drive": ImplicitActuatorCfg(

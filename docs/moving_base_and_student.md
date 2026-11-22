@@ -38,7 +38,7 @@
 
 | 항목 | 내용 |
 |---|---|
-| 로봇 고정 | 시뮬레이션 시작 전에 env마다 고정 조인트(윗판/대차 → robot_mount, articulation 밖) + 충돌 필터 (`mdp.attach_robot_to_base`). `replicate_physics=False` 필요 |
+| 로봇 고정 | **팔과 베이스를 하나의 articulation으로** (2026-11-23부터, PhysX·Newton 공통): `scripts/build_mounted_robot_usd.py`가 "팔 USD + 베이스 USD + 고정 조인트(articulation 안) + 충돌 필터"로 `assets/data/mounted/ur5_on_{stewart,husky_rail}.usda`를 만듦, 설정은 `assets/mounted.py`. 로봇 기준 좌표계는 articulation root(베이스)가 아니라 팔의 root 몸체 `robot_mount` (`mdp/frames.py`). 이전: 시작 전에 env마다 articulation 밖 고정 조인트(`attach_robot_to_base`, 삭제) |
 | **드론 따라가기** | 로봇이 보낸 **base 자세(x, y, yaw)**를 드론이 지연 0.1 s, 잡음 2 mm로 받아, PX4식 속도 0.5 m/s·가속 1 m/s² 한계 안에서 hover 목표를 옮김. 정책은 드론을 조종하지 않음 (`DroneHoverController.follow_asset`, 가정값) |
 | 관측 추가 | **base IMU** 6 (각속도 + 비력, base 좌표, 잡음) → 선생 관측 52 → 58 (`expand_policy_inputs.py`) |
 | 커리큘럼 | 움직임 크기 0 → 1을 학습 성공률(EMA)이 0.85 이상일 때만 키움 (`mdp.ramp_base_motion`) |
@@ -169,47 +169,38 @@ mid 155 mm/s·74 mm·3.8°, big 310 mm/s·149 mm·7.7°.
 - 이 경우 RL 미세조정은 오히려 나빠짐(학습 성공률 81%에서 정체 후 하락) → 증류 결과를 그대로 채택
 - 남은 차이(big 43% vs 64%)는 대부분 드론 밀림. 다음 후보: RNN 학생, DAgger 더 길게, big 비중을 올린 증류
 
-### Newton에서 움직이는 베이스 (2026-11-23 원인 확인, 고정 root로 수정)
-- 구조: 로봇팔은 베이스와 **별도 asset**으로 둔다(여러 팔로 바꿔 끼우기 위해, 사용자 결정). PhysX는 asset 사이 고정 조인트
-  (`mdp.attach_robot_to_base`). Newton은 Isaac Lab 3.0 cloner가 asset마다 builder를 따로 만들어 합치므로
-  (`isaaclab_newton/cloner/newton_clone_utils.py`, `add_builder(asset, xform=...)`) asset 사이 조인트가 빠진다.
-  Newton 자체에는 `parent_body`(다른 몸체에 FIXED로 붙이기)가 있지만 Isaac Lab은 쓰지 않는다.
-  Isaac Lab의 이동 매니퓰레이터 예(`RIDGEBACK_FRANKA_PANDA_CFG`)는 베이스+팔을 articulation 하나로 만든다(팔 교체에 불리해서 채택 안 함)
-- 이전 방식: 로봇 root를 떠 있게(FREE 조인트, Newton USD import 기본값) 두고 `mdp.SoftMount`가 매 물리 스텝 자세·속도를 씀
-- **원인**: 한 물리 스텝 동안 root가 자유라 로봇 전체가 중력으로 떨어졌다가 다시 올려짐 → 스텝 직후 root가 마운트보다 0.4 mm 낮고
-  0.063 m/s(그리퍼 0.087 m/s)로 떨어지는 중. 그리퍼가 드론에 대해 120 Hz로 떨려서 판정(그리퍼 정지 + 양쪽 힘)이 안 됨
-- **수정**: Newton에서만 로봇을 `fix_root_link=True`로 spawn(`env_cfg.py` preset). 고정 root에 쓴 자세는 Newton이
-  `model.joint_X_p`에 쓰고 MuJoCo가 root를 mocap 몸체처럼 옮긴다 → 떨어짐 없음, 로봇이 마운트를 0.4 mm 이내로 따라감. PhysX는 그대로
+### 팔과 베이스를 하나의 articulation으로 (2026-11-23, PhysX·Newton 공통)
+**경과**
+- Newton은 Isaac Lab 3.0 cloner가 asset마다 모델을 따로 만들어 합치므로(`isaaclab_newton/cloner/newton_clone_utils.py`)
+  asset 사이 조인트(이전 PhysX 방식)가 빠진다. 시도한 것:
+  - 떠 있는 root를 매 스텝 마운트 위치로 씀: 한 스텝 동안 로봇이 중력으로 떨어졌다 올라감(0.4 mm, 0.06 m/s) → 그리퍼가 떨려 잡기 판정 안 됨
+  - 고정 root(`fix_root_link`)에 자세를 씀(커밋 `075e97d`): **실제로는 로봇이 움직이지 않았다.** Newton은 고정 root의 자세를
+    `model.joint_X_p`에만 쓰고 MuJoCo는 그 몸체를 고정물로 둔다. 읽히는 `root_link_pose_w`만 바뀌어서 "0.4 mm 이내로 따라감"으로
+    잘못 판단했었다(실제 몸체 `body_link_pose_w`로 재면 마운트 오차 90~180 mm). 정지 베이스 16/16은 맞았고, 움직이는 베이스가 낮았던 원인
+- 비교 시험(드론 없는 Stewart + UR5, 같은 동작 5가지, 기준 = 하나의 articulation): 반력 되돌려 주기는 위 문제로 움직이면 실패,
+  MuJoCo weld 구속은 마운트 회전관성을 1.0으로 키워야 안정(원래 0.0017이면 yaw 흔들림이 40°까지 커짐) → **하나의 articulation 채택**
 
-| 스크립트 전문가 (16회) | PhysX | Newton 이전 (floating) | **Newton 고정 root** |
-|---|---|---|---|
-| Husky 정지 | – | 0/16 | **16/16** |
-| Stewart 정지 | – | 4/16 | **16/16** |
-| Husky 움직임 | 11/16 | 0/16 | 4/16 |
-| Stewart 움직임 | 11/16 | 1/16 | 7/16 |
+**구조** (`scripts/build_mounted_robot_usd.py`, 사용자 결정: 팔 교체는 이 스크립트에 항목을 추가해 새 USD를 만든다)
+- default prim이 팔 USD를 참조 → 팔의 prim 경로·센서·`Physics` variant 그대로(`{ENV}/Robot/Geometry/...`)
+- `Base`가 베이스 USD를 참조, 베이스 root 몸체가 원점에 오게 배치(`init_state` = 베이스 root 자세)
+- 팔 root 몸체(`robot_mount`)를 마운트 자세에 놓고 articulation root를 지움, `MountJoint`(articulation 안 고정 조인트)로 베이스
+  마운트 몸체(윗판 / 대차)에 고정, 팔 받침 두 몸체 ↔ 마운트 몸체 충돌 끔
+- 참조는 상대 경로(다른 PC에서도 동작). 관절은 이름으로 고르므로 행동·관측·보상은 그대로(다리·레일 관절이 늘어도 영향 없음)
 
-- 남은 차이(움직일 때, 대부분 드론 밀림): mocap 몸체는 접촉 계산에서 속도가 0이라서라고 추정(**미확인**)
-- 한계: 한 방향 연결이라 로봇 무게·반력이 베이스에 실리지 않는다
-- 진단 주의: 학습용 태스크는 커리큘럼이 진폭 0에서 시작 → 움직이는 베이스를 보려면 `env.curriculum.base_motion.params.initial=1.0`
-- 측정(정지 Stewart, 다리 6개 힘 합): PhysX 547.8 N, Newton 282.2 N → 차이 266 N ≈ 로봇 무게(22.6 kg). **PhysX는 팔 무게·반력이
-  베이스에 실리고(어깨 두 관절을 흔들면 408~706 N), Newton은 안 실림**(어깨 회전만 흔들면 282.2~282.3 N으로 그대로)
-- **로봇-베이스 충돌 끄기 (2026-11-23)**: PhysX는 `attach_robot_to_base`가 로봇 마운트·base_link ↔ 베이스 몸체에 `FilteredPairsAPI`를 씀.
-  Newton importer는 asset마다 따로 읽어서 asset 사이 쌍을 잃음 → `tasks/grasp/grasp_env.py`의 `GraspRLEnv`가 Isaac Lab 공식 hook
-  (`isaaclab_newton.cloner.newton_builder_world_hook`)으로 환경마다 같은 쌍을 추가. 모든 태스크의 entry point를 `GraspRLEnv`로 바꿈
-  (PhysX·고정 베이스에서는 그냥 `ManagerBasedRLEnv`). 대상은 PhysX와 같이 `SoftMountCfg.filtered_robot_bodies`(Stewart: 마운트·base_link ↔
-  윗판, Husky: 없음 — PhysX도 없음). 확인: Newton 모델에 쌍이 들어감, 정지 Stewart·Husky 스크립트 16/16, PhysX 결과 변경 없음
-  (고정 베이스 스크립트 15/16 변경 전후 같음, 25i mid 241/256 같음)
-- 이전에 "Newton에서 팔을 흔들 때 다리 힘이 바뀜(282 → 최대 약 1000 N)"으로 본 것은 접촉 때문이 아님: 어깨·윗팔까지 윗판과 충돌을 꺼도
-  같았고, 팔이 드론을 쳐서 에피소드가 끝나기(drone_knocked) 한두 스텝 전에만 나타남. 그 순간 힘이 어디로 전달되는지는 **미확인**
+**확인**
+- 실제 몸체 위치로 측정: 로봇 base가 베이스와 함께 19~30 cm 움직이고, 마운트 좌표에서 본 위치 변화 0.000 mm (PhysX·Newton, Stewart·Husky)
+- 다리 힘 합(정지 Stewart, 팔 정지): 하나의 articulation PhysX 549.4 N, Newton 545.7 N (이전 PhysX 547.8 N, 이전 Newton 282 N = 팔 무게 빠짐)
 
-#### 앞으로 (Newton 양방향 연결, 팔은 별도 asset 유지가 조건)
-| 후보 | 내용 | 비고 |
+| 스크립트 전문가 (16회) | PhysX 이전 → 지금 | Newton 이전 → 지금 |
 |---|---|---|
-| ① 반력 되돌려 주기 | 지금처럼 고정 root로 옮기고, root 조인트가 받는 힘(joint wrench)을 읽어 반대로 윗판에 가함 | 변경 가장 작음. 1스텝 늦음, 안정성 확인 필요 |
-| ② MuJoCo weld 등식 | Isaac Lab cloner의 world builder hook에서 로봇 root와 윗판 사이에 weld equality 추가(Stewart 고리처럼) | 양방향, 약간 soft. hook이 공개 API인지 확인 필요 |
-| ③ 시작할 때 자동 합치기 | spawner가 "베이스 USD + 팔 USD + 고정 조인트"를 articulation 하나로 합침 (손으로 만든 통합 USD 아님) | 가장 정확, 작업 큼. 관절 순서가 바뀜 |
-| ④ Isaac Lab 업데이트 | cloner가 asset 사이 조인트를 지원하면(Newton에는 `parent_body`가 있음) 지금 구조 그대로 | 대기 |
-- 함께: Newton에서 로봇-베이스 충돌 끄기(PhysX FilteredPairs와 같게) — 작은 수정, 먼저 할 것
+| Stewart 정지 | 11 → 12 | 16 → 16 |
+| Stewart 움직임 (진폭 1.0) | 11 → 10 | 7 → 7 |
+| Husky 정지 | – → 15 | 16 → 16 |
+| Husky 움직임 | 11 → 14 | 4 → **16** |
+
+- 같은 하나의 articulation이라도 Stewart가 움직일 때 다리 힘은 PhysX와 Newton이 크게 다름(RMS 500~1000 N): 마운트 방식이 아니라 엔진 차이
+- 삭제한 것: `mdp.attach_robot_to_base`, `mdp.SoftMount`, `spawn_mount_joint`, `grasp_env.GraspRLEnv`(Newton 충돌 필터 hook) —
+  하나의 articulation에서는 필요 없음. 시험 코드는 커밋하지 않음
 
 <br>
 

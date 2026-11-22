@@ -11,7 +11,7 @@ from . import agents
 
 gym.register(
     id="DroneGraspRl-Grasp-UR5",
-    entry_point="drone_grasp_rl.tasks.grasp.grasp_env:GraspRLEnv",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.env_cfg:UR5GraspEnvCfg",
@@ -22,7 +22,7 @@ gym.register(
 
 gym.register(
     id="DroneGraspRl-Grasp-UR5-Record",
-    entry_point="drone_grasp_rl.tasks.grasp.grasp_env:GraspRLEnv",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.env_cfg:UR5GraspRecordEnvCfg",
@@ -33,7 +33,7 @@ gym.register(
 
 gym.register(
     id="DroneGraspRl-Grasp-UR5-Stewart",
-    entry_point="drone_grasp_rl.tasks.grasp.grasp_env:GraspRLEnv",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.env_cfg:UR5GraspStewartEnvCfg",
@@ -44,7 +44,7 @@ gym.register(
 
 gym.register(
     id="DroneGraspRl-Grasp-UR5-Student",
-    entry_point="drone_grasp_rl.tasks.grasp.grasp_env:GraspRLEnv",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.env_cfg:UR5GraspStudentEnvCfg",
@@ -57,7 +57,7 @@ gym.register(
 
 gym.register(
     id="DroneGraspRl-Grasp-UR5-Husky",
-    entry_point="drone_grasp_rl.tasks.grasp.grasp_env:GraspRLEnv",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.env_cfg:UR5GraspHuskyEnvCfg",
@@ -68,7 +68,7 @@ gym.register(
 
 gym.register(
     id="DroneGraspRl-Grasp-UR5-Stewart-Record",
-    entry_point="drone_grasp_rl.tasks.grasp.grasp_env:GraspRLEnv",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.env_cfg:UR5GraspStewartRecordEnvCfg",
@@ -79,7 +79,7 @@ gym.register(
 
 gym.register(
     id="DroneGraspRl-Grasp-UR5-Husky-Record",
-    entry_point="drone_grasp_rl.tasks.grasp.grasp_env:GraspRLEnv",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.env_cfg:UR5GraspHuskyRecordEnvCfg",
@@ -90,7 +90,7 @@ gym.register(
 
 gym.register(
     id="DroneGraspRl-Grasp-UR5-Stewart-Student",
-    entry_point="drone_grasp_rl.tasks.grasp.grasp_env:GraspRLEnv",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.env_cfg:UR5GraspStewartStudentEnvCfg",
@@ -103,7 +103,7 @@ gym.register(
 
 gym.register(
     id="DroneGraspRl-Grasp-UR5-Husky-Student",
-    entry_point="drone_grasp_rl.tasks.grasp.grasp_env:GraspRLEnv",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.env_cfg:UR5GraspHuskyStudentEnvCfg",

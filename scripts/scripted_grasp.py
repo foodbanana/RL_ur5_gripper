@@ -99,7 +99,9 @@ def main():
         # TCP orientation relative to the drone: the start pose holds the gripper the way it grasps a drone that
         # has the base orientation (grasp axis along the drone y axis, approach along +z).
         tcp_quat_w = frame_pose_w(env, "tcp")[1]
-        tcp_in_drone = math_utils.quat_mul(math_utils.quat_inv(robot.data.root_quat_w.torch), tcp_quat_w)
+        from drone_grasp_rl.tasks.grasp.mdp.frames import base_quat_w
+
+        tcp_in_drone = math_utils.quat_mul(math_utils.quat_inv(base_quat_w(robot)), tcp_quat_w)
 
         state = torch.full((n,), PRE, dtype=torch.long, device=dev)
         steps = torch.zeros(n, dtype=torch.long, device=dev)

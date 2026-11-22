@@ -26,6 +26,7 @@ from isaaclab.managers import ManagerTermBase
 from isaaclab.sensors import CameraCfg
 from isaaclab.sim import PinholeCameraCfg
 
+from ...mdp.frames import base_quat_w
 from ...mdp.observations import _quat_from_rotvec, frame_pose_b
 
 WRIST_CAMERA_WIDTH = 640
@@ -315,7 +316,7 @@ class marker_drone_pose_b(ManagerTermBase):
         rot_std = torch.deg2rad(rot_med / 1.18)
         # true pose in the base frame, moved back by the latency
         pos, quat = frame_pose_b(env, "drone")
-        base_quat = env.scene["robot"].data.root_quat_w.torch
+        base_quat = base_quat_w(env.scene["robot"])
         lin_vel = math_utils.quat_apply_inverse(base_quat, drone.root_lin_vel_w.torch)
         ang_vel = math_utils.quat_apply_inverse(base_quat, drone.root_ang_vel_w.torch)
         delay = latency + frame_period * torch.rand(pos.shape[0], 1, device=pos.device)

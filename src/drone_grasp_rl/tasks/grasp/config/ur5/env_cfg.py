@@ -196,42 +196,14 @@ def _setup_recording(cfg):
     cfg.curriculum = None
 
 
-def _mount_robot(cfg, base_asset: str, base_body: str, **params):
-    """Fix the robot base to the moving base; the robot stays a separate asset, so other arms can be mounted.
-
-    - PhysX: a prestartup event authors a fixed joint in every environment (no replication), outside both
-      articulations.
-    - Newton (replication on): Isaac Lab 3.0's cloner builds each asset separately and drops a joint between two
-      assets. The robot is spawned with a fixed root (``fix_root_link`` preset in the task) and ``mdp.SoftMount``
-      writes the mount pose to it every physics step: for a fixed root Newton writes the root joint's parent
-      transform (``model.joint_X_p``; MuJoCo moves the root like a mocap body). A floating root written every step
-      fell under gravity within each step (0.4 mm, 0.06 m/s) and the shaking gripper never stalled on the drone.
-      The robot-to-base collision filter (``filtered_robot_bodies``) is added by ``grasp_env.GraspRLEnv``.
-    """
-    cfg.events.attach_robot = preset(
-        default=EventTerm(func=mdp.attach_robot_to_base, mode="prestartup", params=dict(params)),
-        newton_mjwarp=None,
-    )
-    cfg.actions.robot_mount = preset(
-        default=None,
-        newton_mjwarp=mdp.SoftMountCfg(
-            asset_name=base_asset,
-            base_body_name=base_body,
-            mount_pos=params.get("mount_pos", (0.0, 0.0, 0.0)),
-            mount_yaw_deg=params.get("mount_yaw_deg", 0.0),
-            base_body_path=params["base_body_path"],
-            filtered_robot_bodies=list(params.get("filtered_robot_bodies", [])),
-        ),
-    )
-
-
 @configclass
 class UR5GraspStewartEnvCfg(UR5GraspEnvCfg):
     """The drone grasp with the UR5 on the closed-loop Stewart platform (``assets/stewart.py``), no table.
 
-    - the robot base is fixed to the platform's top plate (rotation center = mount) by a joint authored per
-      environment before the simulation starts (``mdp.attach_robot_to_base``); robot base 1.0 m above the floor,
-      the drone at the same base-relative targets as on the table
+    - the UR5 and the platform are one articulation (``assets/mounted.py``, ``ur5_on_stewart``): the robot base is
+      fixed to the top plate (rotation center = mount) by a joint inside the articulation, so the arm loads the legs
+      on PhysX and Newton alike; robot base 1.0 m above the floor, the drone at the same base-relative targets as on
+      the table
     - ``base_motion``: the platform controller (pose command -> inverse kinematics -> leg actuators), presets of the
       data collection repo, amplitude ramped up by the ``base_motion`` curriculum while the success rate holds
     - the drone follows the base pose in the plane with latency and PX4-style limits (``follow_asset``): the robot
@@ -245,18 +217,12 @@ class UR5GraspStewartEnvCfg(UR5GraspEnvCfg):
         from isaaclab.managers import ObservationTermCfg as ObsTerm
 
         from drone_grasp_rl.assets import stewart as st
-        from drone_grasp_rl.assets.bases import STEWART_CFG, STEWART_LEG_JOINTS, STEWART_TOP_BODY
+        from drone_grasp_rl.assets.bases import STEWART_CFG, STEWART_LEG_JOINTS
+        from drone_grasp_rl.assets.mounted import mounted_robot_cfg
 
         scene = self.scene
         scene.table = None
-        # PhysX: the mount joint is authored in every environment (no replication). Newton clones the environments
-        # from env_0 in its model builder (only env_0 is on the stage); without replication it found no bodies.
-        scene.replicate_physics = preset(default=False, newton_mjwarp=True)
-        scene.stewart = STEWART_CFG
-        scene.robot = scene.robot.replace(
-            spawn=scene.robot.spawn.replace(fix_root_link=preset(default=False, newton_mjwarp=True)),  # _mount_robot
-            init_state=scene.robot.init_state.replace(pos=(0.0, 0.0, st.HEIGHT)),
-        )
+        scene.robot = mounted_robot_cfg(scene.robot, STEWART_CFG, "ur5_on_stewart")
         drone_pos = scene.drone.init_state.pos
         scene.drone = scene.drone.replace(
             init_state=scene.drone.init_state.replace(
@@ -264,7 +230,6 @@ class UR5GraspStewartEnvCfg(UR5GraspEnvCfg):
             )
         )
         self.actions.base_motion = mdp.StewartMotionCfg(
-            asset_name="stewart",
             leg_joint_names=STEWART_LEG_JOINTS,
             # mostly small and mid, a little big (user decision 2026-11-22: big kept to see it, about 11 %): with the
             # platform moving from the start, big (x, z +-15 cm, roll / pitch +-6 deg, the base up to 0.3 m/s)
@@ -272,18 +237,11 @@ class UR5GraspStewartEnvCfg(UR5GraspEnvCfg):
             preset_weights={"small": 1.0, "mid": 1.0, "big": 0.25},
         )
         self.actions.drone_hover.follow_asset = "robot"
-        mount = BODY_PRIM_PATHS[BASE_BODY_NAME]
-        _mount_robot(
-            self,
-            "stewart",
-            STEWART_TOP_BODY,
-            base_body_path=f"Stewart/{STEWART_TOP_BODY}",
-            robot_body_path=f"Robot/{mount}",
-            filtered_robot_bodies=[f"Robot/{mount}", f"Robot/{mount}/base_link/base_link_inertia"],
-        )
         self.observations.policy.base_imu = ObsTerm(func=mdp.base_imu)
         # privileged (teacher): base velocity, displacement and tilt; scaled to about unit size
-        self.observations.policy.base_state = ObsTerm(func=mdp.base_state, scale=5.0)
+        self.observations.policy.base_state = ObsTerm(
+            func=mdp.base_state, params={"default_pos": (0.0, 0.0, st.HEIGHT)}, scale=5.0
+        )
         # pushing the drone was the main failure on the moving platform: -40 (fixed base -20) took mid from
         # 90.6 to 94.5 % with no knocked drone (try25e vs try25f)
         self.rewards.drone_push.weight = -40.0
@@ -335,7 +293,8 @@ class UR5GraspHuskyEnvCfg(UR5GraspEnvCfg):
 
     The Husky drives along its x axis like the data collection repo's kinematic Husky (``mdp.HuskyMotion``:
     0.30 m out and back at 0.05 m/s, provisional), as a carriage on a stiff driven rail that carries the Husky's
-    look and, through a fixed joint, the robot (Clearpath's Husky + UR5 mount, yaw -90 deg). Drone following,
+    look and, through a fixed joint inside one articulation (``assets/mounted.py``, ``ur5_on_husky_rail``), the robot
+    (Clearpath's Husky + UR5 mount, yaw -90 deg). Drone following,
     base IMU and the motion curriculum as in :class:`UR5GraspStewartEnvCfg`.
     """
 
@@ -353,18 +312,15 @@ class UR5GraspHuskyEnvCfg(UR5GraspEnvCfg):
             HUSKY_ROBOT_MOUNT_YAW_DEG,
             HUSKY_VISUAL_CFG,
         )
+        from drone_grasp_rl.assets.mounted import mounted_robot_cfg
 
         scene = self.scene
         scene.table = None
-        scene.replicate_physics = preset(default=False, newton_mjwarp=True)  # see UR5GraspStewartEnvCfg
-        scene.husky_rail = HUSKY_RAIL_CFG
-        scene.husky = HUSKY_VISUAL_CFG
+        scene.robot = mounted_robot_cfg(scene.robot, HUSKY_RAIL_CFG, "ur5_on_husky_rail")
+        # the Husky's meshes on the carriage of the mounted robot's rail
+        scene.husky = HUSKY_VISUAL_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot/Base/carriage/husky")
         yaw = math.radians(HUSKY_ROBOT_MOUNT_YAW_DEG)
         base = (HUSKY_ROBOT_MOUNT_POS[0], HUSKY_ROBOT_MOUNT_POS[1], HUSKY_BASE_HEIGHT + HUSKY_ROBOT_MOUNT_POS[2])
-        scene.robot = scene.robot.replace(
-            spawn=scene.robot.spawn.replace(fix_root_link=preset(default=False, newton_mjwarp=True)),  # _mount_robot
-            init_state=scene.robot.init_state.replace(pos=base, rot=(0.0, 0.0, math.sin(yaw / 2), math.cos(yaw / 2))),
-        )
         # the drone at the same base-relative place as on the table
         d = scene.drone.init_state.pos
         d_b = (d[0], d[1], d[2] - grasp.TABLE_TOP_Z)
@@ -374,18 +330,8 @@ class UR5GraspHuskyEnvCfg(UR5GraspEnvCfg):
                 pos=(base[0] + c * d_b[0] - s * d_b[1], base[1] + s * d_b[0] + c * d_b[1], base[2] + d_b[2])
             )
         )
-        self.actions.base_motion = mdp.HuskyMotionCfg(asset_name="husky_rail")
+        self.actions.base_motion = mdp.HuskyMotionCfg()
         self.actions.drone_hover.follow_asset = "robot"
-        mount = BODY_PRIM_PATHS[BASE_BODY_NAME]
-        _mount_robot(
-            self,
-            "husky_rail",
-            "carriage",
-            base_body_path="HuskyRail/carriage",
-            robot_body_path=f"Robot/{mount}",
-            mount_pos=HUSKY_ROBOT_MOUNT_POS,
-            mount_yaw_deg=HUSKY_ROBOT_MOUNT_YAW_DEG,
-        )
         self.observations.policy.base_imu = ObsTerm(func=mdp.base_imu)
         self.curriculum.base_motion = CurrTerm(func=mdp.ramp_base_motion, params={"initial": 0.0, "final": 1.0})
 

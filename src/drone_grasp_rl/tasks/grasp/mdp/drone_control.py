@@ -23,6 +23,7 @@ from isaaclab.managers import ActionTerm, ActionTermCfg
 from isaaclab.utils import configclass
 
 from .actions import _to_index
+from .frames import base_pos_w, base_quat_w
 
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation
@@ -143,9 +144,8 @@ class DroneHoverController(ActionTerm):
         self._asset.permanent_wrench_composer.set_forces_and_torques_index(forces=forces, is_global=True)
 
     def _base_planar(self) -> torch.Tensor:
-        data = self._follow.data
-        pos = data.root_pos_w.torch
-        yaw = math_utils.euler_xyz_from_quat(data.root_quat_w.torch)[2]
+        pos = base_pos_w(self._follow)
+        yaw = math_utils.euler_xyz_from_quat(base_quat_w(self._follow))[2]
         return torch.stack([pos[:, 0], pos[:, 1], yaw, pos[:, 2]], dim=-1)
 
     def _follow_shift(self):
@@ -341,5 +341,5 @@ def drone_target_pos_b(env: ManagerBasedEnv, term_name: str = "drone_hover", res
     if term_name in env.action_manager.active_terms:
         robot = env.scene["robot"]
         target_w = env.action_manager.get_term(term_name).reference_pos_w
-        return math_utils.quat_apply_inverse(robot.data.root_quat_w.torch, target_w - robot.data.root_pos_w.torch)
+        return math_utils.quat_apply_inverse(base_quat_w(robot), target_w - base_pos_w(robot))
     return env.event_manager.get_term_cfg(reset_event).func.reset_pos_b
