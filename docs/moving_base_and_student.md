@@ -177,3 +177,8 @@ mid 155 mm/s·74 mm·3.8°, big 310 mm/s·149 mm·7.7°.
 - **실물 치수:** 부착점 반지름·각도, 다리 행정·속도·힘 (지금은 기존 레포의 sim용 설계값과 가정값)
 - 참고 코드: https://github.com/daniel-s-ingram/stewart , https://github.com/mlayek21/Stewart-Platform (둘 다 IK만 있고 FK는 없음)
 - IK·FK 구현을 바꿀 때는 먼저 협의한다
+
+## 8. 앞으로 할 것: 보고서용 장면 영상
+- 손목 카메라 영상은 녹화 데이터에서 바로 만듦 (`tools/lerobot_export/make_report_videos.py`, `outputs/report_videos/`)
+- **밖에서 본 장면 영상**(로봇·드론·Stewart/Husky 전체)은 렌더링에 GPU가 필요해 학습이 끝난 뒤 만든다
+  (`isaaclab play ... --video` 또는 고정 시점 카메라로 녹화)

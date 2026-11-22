@@ -14,3 +14,13 @@ uv run --project tools/lerobot_export python tools/lerobot_export/lerobot_merge_
     --all --intermediate-dir datasets/intermediate/<recording> --repo-id local/<name>
 uv run --project tools/lerobot_export python tools/lerobot_export/inspect_dataset_v21.py datasets/lerobot_v21/local/<name> --load
 ```
+
+Report videos (H.264, plays in PowerPoint; the data sets hold AV1): wrist clips with labels, RGB | depth side by side,
+and a grid of one episode per kind.
+
+```bash
+uv run --project tools/lerobot_export python tools/lerobot_export/make_report_videos.py \
+    --set fixed=datasets/intermediate/teacher20b_vdr_depth_300 \
+    --set husky=datasets/intermediate/husky26a_moving_vdr_depth_300 \
+    --set stewart=datasets/intermediate/stewart25h_moving_vdr_depth_300 --out outputs/report_videos
+```
