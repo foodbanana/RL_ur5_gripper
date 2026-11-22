@@ -435,3 +435,103 @@ class stewart_fk_state(ManagerTermBase):
         self._prev = self._pose.clone()
         self._valid[:] = True
         return torch.cat([self._pose, rate], dim=-1)
+
+
+class SoftMount(ActionTerm):
+    """Newton: keep the robot base on the moving base (mount pose ``mount_pos``, ``mount_yaw_deg`` in the base body).
+
+    On PhysX the robot is fixed to the base by a joint outside both articulations (:func:`attach_robot_to_base`).
+    Newton builds and clones its model per asset and drops a joint between two assets (the robot fell over).
+
+    ``mode="kinematic"`` (default): every physics step the robot's root is set to the mount pose and velocity. Exact,
+    but one-way: the robot's weight and reaction do not load the base (small for the stiffly driven Husky rail; the
+    Stewart legs then carry only the plate). ``mode="spring"``: a spring-damper wrench with the reaction on the base;
+    with the light root body (5 kg, 0.01 kg m^2) gains stiff enough to hold the arm were unstable (NaN).
+    """
+
+    cfg: SoftMountCfg
+
+    def __init__(self, cfg: SoftMountCfg, env: ManagerBasedEnv):
+        super().__init__(cfg, env)
+        self._robot = env.scene[cfg.robot_name]
+        self._base_body = self._asset.body_names.index(cfg.base_body_name)
+        self._root_body = self._robot.body_names.index(cfg.robot_body_name)
+        n, dev = self.num_envs, self.device
+        self._offset = torch.tensor(cfg.mount_pos, device=dev).repeat(n, 1)
+        half = math.radians(cfg.mount_yaw_deg) / 2
+        self._offset_q = torch.tensor([0.0, 0.0, math.sin(half), math.cos(half)], device=dev).repeat(n, 1)
+
+    @property
+    def action_dim(self) -> int:
+        return 0
+
+    @property
+    def raw_actions(self) -> torch.Tensor:
+        return torch.zeros(self.num_envs, 0, device=self.device)
+
+    @property
+    def processed_actions(self) -> torch.Tensor:
+        return self.raw_actions
+
+    def process_actions(self, actions: torch.Tensor):
+        pass
+
+    def apply_actions(self):
+        cfg = self.cfg
+        base = self._asset.data
+        if cfg.mode == "kinematic":
+            b_pose = base.body_link_pose_w.torch[:, self._base_body]
+            b_lin = base.body_link_lin_vel_w.torch[:, self._base_body]
+            b_ang = base.body_link_ang_vel_w.torch[:, self._base_body]
+            r = math_utils.quat_apply(b_pose[:, 3:7], self._offset)
+            pose = torch.cat([b_pose[:, :3] + r, math_utils.quat_mul(b_pose[:, 3:7], self._offset_q)], dim=-1)
+            vel = torch.cat([b_lin + torch.linalg.cross(b_ang, r, dim=-1), b_ang], dim=-1)
+            self._robot.write_root_link_pose_to_sim_index(root_pose=pose)
+            self._robot.write_root_link_velocity_to_sim_index(root_velocity=vel)
+            return
+        b_pose = base.body_link_pose_w.torch[:, self._base_body]
+        b_lin = base.body_link_lin_vel_w.torch[:, self._base_body]
+        b_ang = base.body_link_ang_vel_w.torch[:, self._base_body]
+        r = math_utils.quat_apply(b_pose[:, 3:7], self._offset)
+        t_pos = b_pose[:, :3] + r
+        t_quat = math_utils.quat_mul(b_pose[:, 3:7], self._offset_q)
+        t_vel = b_lin + torch.linalg.cross(b_ang, r, dim=-1)
+        rob = self._robot.data
+        pose = rob.body_link_pose_w.torch[:, self._root_body]
+        lin = rob.body_link_lin_vel_w.torch[:, self._root_body]
+        ang = rob.body_link_ang_vel_w.torch[:, self._root_body]
+        force = cfg.kp * (t_pos - pose[:, :3]) + cfg.kd * (t_vel - lin)
+        err = math_utils.axis_angle_from_quat(math_utils.quat_mul(t_quat, math_utils.quat_inv(pose[:, 3:7])))
+        torque = cfg.kp_rot * err + cfg.kd_rot * (b_ang - ang)
+        f_r = torch.zeros(self.num_envs, self._robot.num_bodies, 3, device=self.device)
+        t_r = torch.zeros_like(f_r)
+        f_r[:, self._root_body], t_r[:, self._root_body] = force, torque
+        self._robot.permanent_wrench_composer.set_forces_and_torques_index(forces=f_r, torques=t_r, is_global=True)
+        f_b = torch.zeros(self.num_envs, self._asset.num_bodies, 3, device=self.device)
+        t_b = torch.zeros_like(f_b)
+        # reaction at the mount point, expressed about the base body's origin
+        f_b[:, self._base_body] = -force
+        t_b[:, self._base_body] = -torque - torch.linalg.cross(r, force, dim=-1)
+        self._asset.permanent_wrench_composer.set_forces_and_torques_index(forces=f_b, torques=t_b, is_global=True)
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> None:
+        pass
+
+
+@configclass
+class SoftMountCfg(ActionTermCfg):
+    """Configuration of :class:`SoftMount` (``asset_name`` = the moving base articulation)."""
+
+    class_type: type[ActionTerm] = SoftMount
+    asset_name: str = MISSING
+    base_body_name: str = MISSING
+    robot_name: str = "robot"
+    robot_body_name: str = "robot_mount"
+    mount_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    mount_yaw_deg: float = 0.0
+    mode: str = "kinematic"
+    """``"kinematic"`` (root set to the mount every physics step) or ``"spring"`` (wrench; was unstable)."""
+    kp: float = 2.0e5
+    kd: float = 4.0e3
+    kp_rot: float = 2.0e4
+    kd_rot: float = 4.0e2

@@ -196,18 +196,22 @@ def _setup_recording(cfg):
     cfg.curriculum = None
 
 
-def _mount_robot(cfg, **params):
-    """Fix the robot base to the moving base. PhysX: a prestartup event authors the joint in every environment
-    (no replication). Newton: a spawner authors it in env_0, which Newton's builder clones (replication on)."""
-    from isaaclab.assets import AssetBaseCfg
-
+def _mount_robot(cfg, base_asset: str, base_body: str, **params):
+    """Fix the robot base to the moving base. PhysX: a prestartup event authors a fixed joint in every environment
+    (no replication). Newton (replication on): a stiff spring-damper "virtual weld" action term (``mdp.SoftMount``),
+    since Newton's per-asset model building drops a joint between two assets."""
     cfg.events.attach_robot = preset(
         default=EventTerm(func=mdp.attach_robot_to_base, mode="prestartup", params=dict(params)),
         newton_mjwarp=None,
     )
-    cfg.scene.robot_mount_joint = preset(
+    cfg.actions.robot_mount = preset(
         default=None,
-        newton_mjwarp=AssetBaseCfg(prim_path="{ENV_REGEX_NS}/RobotMount", spawn=mdp.MountJointCfg(**params)),
+        newton_mjwarp=mdp.SoftMountCfg(
+            asset_name=base_asset,
+            base_body_name=base_body,
+            mount_pos=params.get("mount_pos", (0.0, 0.0, 0.0)),
+            mount_yaw_deg=params.get("mount_yaw_deg", 0.0),
+        ),
     )
 
 
@@ -261,6 +265,8 @@ class UR5GraspStewartEnvCfg(UR5GraspEnvCfg):
         mount = BODY_PRIM_PATHS[BASE_BODY_NAME]
         _mount_robot(
             self,
+            "stewart",
+            STEWART_TOP_BODY,
             base_body_path=f"Stewart/{STEWART_TOP_BODY}",
             robot_body_path=f"Robot/{mount}",
             filtered_robot_bodies=[f"Robot/{mount}", f"Robot/{mount}/base_link/base_link_inertia"],
@@ -363,6 +369,8 @@ class UR5GraspHuskyEnvCfg(UR5GraspEnvCfg):
         mount = BODY_PRIM_PATHS[BASE_BODY_NAME]
         _mount_robot(
             self,
+            "husky_rail",
+            "carriage",
             base_body_path="HuskyRail/carriage",
             robot_body_path=f"Robot/{mount}",
             mount_pos=HUSKY_ROBOT_MOUNT_POS,
