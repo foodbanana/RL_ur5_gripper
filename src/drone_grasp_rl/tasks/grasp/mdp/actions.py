@@ -128,9 +128,46 @@ class InterpolatedRelativeJointPositionAction(ActionTerm):
 
             distance = tcp_in_grasp_frame(self._env).norm(dim=-1, keepdim=True)
             scale = (distance / self.cfg.slow_distance).clamp(self.cfg.min_step_scale, 1.0)
-            step = step * scale
+            if self.cfg.slow_mode == "relative":
+                step = self._limit_relative_speed(step, self.cfg.max_relative_speed * scale)
+            else:
+                step = step * scale
         self._goal = torch.max(torch.min(self._goal + step, self._upper), self._lower)
         self._substep.zero_()
+
+    def _limit_relative_speed(self, step: torch.Tensor, v_max: torch.Tensor) -> torch.Tensor:
+        """Change the joint goal step so the TCP moves at most ``v_max`` (N, 1) [m/s] relative to the drone.
+
+        Predicted TCP velocity over the next policy step = the step's joint motion (TCP Jacobian) + the TCP velocity the
+        moving base causes (measured TCP velocity minus the arm joints' share) - the drone velocity. If it is too fast,
+        the linear TCP velocity is scaled down to ``v_max`` and the joint step corrected by damped least squares. On a
+        still base this slows the approach like the joint scaling; on a moving base the arm may still follow the base.
+        """
+        from isaaclab.utils.math import quat_apply  # noqa: PLC0415
+
+        from drone_grasp_rl.assets.robots import TCP_BODY_NAME, TCP_OFFSET_POS  # noqa: PLC0415
+
+        from .observations import frame_lin_vel_w  # noqa: PLC0415
+
+        robot, env = self._asset, self._env
+        if not hasattr(self, "_tcp_body"):
+            self._tcp_body = robot.body_names.index(TCP_BODY_NAME)
+            self._jac_body = self._tcp_body - 1 if robot.is_fixed_base else self._tcp_body
+            self._jac_cols = [j + robot.num_base_dofs for j in self._joint_ids]
+            self._tcp_offset = torch.tensor(TCP_OFFSET_POS, device=self.device).repeat(self.num_envs, 1)
+            self._eye3 = torch.eye(3, device=self.device)
+        jac = robot.data.body_link_jacobian_w.torch[:, self._jac_body][:, :, self._jac_cols]
+        r = quat_apply(robot.data.body_link_pose_w.torch[:, self._tcp_body, 3:7], self._tcp_offset)
+        jv = jac[:, :3] - torch.linalg.cross(r.unsqueeze(-1).expand(-1, -1, jac.shape[-1]), jac[:, 3:], dim=1)
+        dt = env.step_dt
+        qd = robot.data.joint_vel.torch[:, self._joint_ids_torch]
+        v_base = frame_lin_vel_w(env, "tcp") - (jv @ qd.unsqueeze(-1)).squeeze(-1)
+        v_rel = (jv @ step.unsqueeze(-1)).squeeze(-1) / dt + v_base - env.scene["drone"].data.root_lin_vel_w.torch
+        speed = v_rel.norm(dim=-1, keepdim=True)
+        dv = v_rel * ((v_max / speed.clamp(min=1e-6)).clamp(max=1.0) - 1.0)
+        a = jv @ jv.transpose(1, 2) + 0.05**2 * self._eye3
+        dq = (jv.transpose(1, 2) @ torch.linalg.solve(a, dv.unsqueeze(-1))).squeeze(-1) * dt
+        return (step + dq).clamp(-self.cfg.max_step, self.cfg.max_step)
 
     def apply_actions(self):
         self._substep += 1.0
@@ -180,6 +217,14 @@ class InterpolatedRelativeJointPositionActionCfg(ActionTermCfg):
 
     min_step_scale: float = 1.0
     """Smallest fraction of ``max_step`` near the grasp point."""
+
+    slow_mode: str = "joint"
+    """``"joint"``: scale the joint goal step by the distance factor. ``"relative"``: limit the TCP speed relative to
+    the drone to ``max_relative_speed`` times the factor (the base's motion is not slowed, see
+    :meth:`InterpolatedRelativeJointPositionAction._limit_relative_speed`)."""
+
+    max_relative_speed: float = 0.5
+    """TCP speed limit relative to the drone at and beyond ``slow_distance`` [m/s] (``slow_mode="relative"``)."""
 
     hold_after_grasp: bool = False
     """Freeze the goal once the grasp judge has the grasp."""
