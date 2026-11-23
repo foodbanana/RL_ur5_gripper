@@ -252,3 +252,15 @@ big, 256회, 같은 seed, 학생 `ss5`(MLP + FK) / 선생 `25i`가 직접 움직
 - **밖에서 본 장면 영상**: `scripts/render_scene_video.py`(녹화 태스크에 고정 시점 카메라를 더해 PNG로 저장) →
   `tools/lerobot_export/frames_to_mp4.py`(H.264). `isaaclab play --video`는 MoviePy가 필요해 쓰지 않음.
   `outputs/report_videos/scene_{fixed,husky,stewart_small,stewart_mid,stewart_big}.mp4` (1280×720, 30 fps, 11 s)
+
+## 9. 앞으로 할 것: 카메라 이미지를 보는 학생 정책 (실물 실험용, 사용자 요청 2026-11-23)
+- 지금 학생은 이미지를 보지 않고, "ArUco 마커를 검출했다면 나왔을 드론 자세"를 숫자로 받는다(`camera.marker_drone_pose_b`:
+  보이는지 기하 계산, 3 % 놓침, 거리²/마커 크기 비례 위치 오차, 자세 오차 표, 지연 45 ms + 프레임 간격, 보정 오차, 놓치면 마지막 값 유지 + age).
+  실물 실험에는 **손목 D435i 이미지(RGB, 필요하면 depth)를 직접 입력으로 받는 학생**이 필요하다
+- 후보 방법
+  - 선생(특권 관측)에서 이미지 학생으로 증류(DAgger): RSL-RL `RslRlCNNModelCfg`(CNN 인코더) + 관절·IMU·FK 입력. 학습 중 매 스텝 렌더링이
+    필요해 env 수가 크게 줄어듦(16 GB GPU에서 tiled camera로 env 수·해상도 확인 필요)
+  - 마커 자세 추정을 실물과 같은 파이프라인(OpenCV ArUco)으로 돌리고 지금 숫자 학생을 그대로 쓰는 방식과 비교
+  - VLA(π0.5)도 이미지 정책이므로, 같은 녹화 데이터·시각 랜덤화를 함께 활용
+- 함께 볼 것: 시각 랜덤화(색·조명·재질, 이미 녹화에 있음), 실제 D435i 영상 특성(초점, 노출, 모션 블러, depth 빠짐),
+  실물 20 mm 마커 10 cm 검출 시험, NuRec 배경
