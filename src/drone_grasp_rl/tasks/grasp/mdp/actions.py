@@ -162,7 +162,12 @@ class InterpolatedRelativeJointPositionAction(ActionTerm):
         dt = env.step_dt
         qd = robot.data.joint_vel.torch[:, self._joint_ids_torch]
         v_base = frame_lin_vel_w(env, "tcp") - (jv @ qd.unsqueeze(-1)).squeeze(-1)
-        v_rel = (jv @ step.unsqueeze(-1)).squeeze(-1) / dt + v_base - env.scene["drone"].data.root_lin_vel_w.torch
+        if self.cfg.drone_velocity == "marker":
+            marker = env.__dict__.get("_drone_grasp_marker_term")
+            v_drone = marker.drone_vel_w_est if marker is not None else torch.zeros_like(v_base)
+        else:
+            v_drone = env.scene["drone"].data.root_lin_vel_w.torch
+        v_rel = (jv @ step.unsqueeze(-1)).squeeze(-1) / dt + v_base - v_drone
         speed = v_rel.norm(dim=-1, keepdim=True)
         dv = v_rel * ((v_max / speed.clamp(min=1e-6)).clamp(max=1.0) - 1.0)
         a = jv @ jv.transpose(1, 2) + 0.05**2 * self._eye3
@@ -225,6 +230,10 @@ class InterpolatedRelativeJointPositionActionCfg(ActionTermCfg):
 
     max_relative_speed: float = 0.5
     """TCP speed limit relative to the drone at and beyond ``slow_distance`` [m/s] (``slow_mode="relative"``)."""
+
+    drone_velocity: str = "true"
+    """Drone velocity for ``slow_mode="relative"``: ``"true"`` (simulator, teacher) or ``"marker"`` (estimated from the
+    wrist camera's ArUco readings, ``camera.marker_drone_pose_b.drone_vel_w_est``; deployable student)."""
 
     hold_after_grasp: bool = False
     """Freeze the goal once the grasp judge has the grasp."""

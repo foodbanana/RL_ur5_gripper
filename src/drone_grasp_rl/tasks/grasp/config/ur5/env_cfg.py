@@ -376,6 +376,8 @@ class UR5GraspStewartStudentEnvCfg(UR5GraspStewartEnvCfg):
         self.observations.student.stewart_fk = ObsTerm(
             func=mdp.stewart_fk_state, params={"leg_joint_names": STEWART_LEG_JOINTS}, scale=5.0
         )
+        # deployable: the relative-speed slowdown uses the drone velocity estimated from the marker readings
+        self.actions.arm_action.drone_velocity = "marker"
 
 
 @configclass

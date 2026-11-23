@@ -26,7 +26,7 @@ from isaaclab.managers import ManagerTermBase
 from isaaclab.sensors import CameraCfg
 from isaaclab.sim import PinholeCameraCfg
 
-from ...mdp.frames import base_quat_w
+from ...mdp.frames import base_pos_w, base_quat_w
 from ...mdp.observations import _quat_from_rotvec, frame_pose_b
 
 WRIST_CAMERA_WIDTH = 640
@@ -267,6 +267,13 @@ class marker_drone_pose_b(ManagerTermBase):
         self._age = torch.zeros(n, device=dev)
         self._valid = torch.zeros(n, dtype=torch.bool, device=dev)
         self.visible_rate = torch.zeros((), device=dev)
+        # drone velocity estimate from the fresh readings (world frame), for the arm action's relative-speed
+        # slowdown on the deployable student (``drone_velocity="marker"``)
+        self.drone_vel_w_est = torch.zeros(n, 3, device=dev)
+        self._prev_w = torch.zeros(n, 3, device=dev)
+        self._since_prev = torch.zeros(n, device=dev)
+        self._prev_ok = torch.zeros(n, dtype=torch.bool, device=dev)
+        env.__dict__["_drone_grasp_marker_term"] = self
 
     def reset(self, env_ids=None):
         ids = slice(None) if env_ids is None else env_ids
@@ -280,6 +287,9 @@ class marker_drone_pose_b(ManagerTermBase):
         )
         self._valid[ids] = False
         self._age[ids] = 0.0
+        self.drone_vel_w_est[ids] = 0.0
+        self._prev_ok[ids] = False
+        self._since_prev[ids] = 0.0
 
     def __call__(
         self,
@@ -333,4 +343,19 @@ class marker_drone_pose_b(ManagerTermBase):
         self._age = torch.where(any_det, torch.zeros_like(self._age), self._age + env.step_dt).clamp(max=max_age)
         self._valid |= True
         self.visible_rate = any_det.float().mean()
+        self._update_velocity(env, any_det)
         return torch.cat([self._last, self._age[:, None]], dim=-1)
+
+    def _update_velocity(self, env, fresh: torch.Tensor, smoothing: float = 0.3):
+        """Drone velocity in the world from successive fresh readings (base pose from the robot's own state, as the
+        real robot knows it from its kinematics), low-pass filtered; held while no marker is seen."""
+        robot = env.scene["robot"]
+        pos_w = base_pos_w(robot) + math_utils.quat_apply(base_quat_w(robot), self._last[:, :3])
+        self._since_prev += env.step_dt
+        raw = (pos_w - self._prev_w) / self._since_prev.clamp(min=1e-3)[:, None]
+        update = fresh & self._prev_ok
+        filtered = smoothing * raw + (1.0 - smoothing) * self.drone_vel_w_est
+        self.drone_vel_w_est = torch.where(update[:, None], filtered, self.drone_vel_w_est)
+        self._prev_w = torch.where(fresh[:, None], pos_w, self._prev_w)
+        self._since_prev = torch.where(fresh, torch.zeros_like(self._since_prev), self._since_prev)
+        self._prev_ok |= fresh
