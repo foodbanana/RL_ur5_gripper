@@ -237,6 +237,11 @@ class UR5GraspStewartEnvCfg(UR5GraspEnvCfg):
             preset_weights={"small": 1.0, "mid": 1.0, "big": 0.25},
         )
         self.actions.drone_hover.follow_asset = "robot"
+        # near the grasp point limit the TCP speed relative to the drone, not the joint step: with the joint step at
+        # 0.1 the arm could not follow the platform's vertical motion while the gripper closed (big: the drone was
+        # pushed away in most failures). try27b (from 25i, 3000 it): small / mid / big 97.1 / 96.2 / 82.5 % vs
+        # 97.5 / 95.4 / 62.7 % (seeds 1, 2), last 5 cm approach 112 instead of 186 mm/s
+        self.actions.arm_action.slow_mode = "relative"
         self.observations.policy.base_imu = ObsTerm(func=mdp.base_imu)
         # privileged (teacher): base velocity, displacement and tilt; scaled to about unit size
         self.observations.policy.base_state = ObsTerm(
